@@ -1,0 +1,116 @@
+package review
+
+import (
+	"context"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/AbiXnash/codist-git"
+	"github.com/AbiXnash/codist-review/store"
+)
+
+func TestJudge(t *testing.T) {
+	code := strings.Split(`class A {
+  String a(Map<String, B> m, String k) {
+    B b = m.get(k);
+    return b.name();
+  }
+  String c(C c) {
+    return c.name();
+  }
+  String d(D d) {
+    if (d == null) { log(); }
+    return d.name();
+  }
+  int e(List<Item> items) {
+    return items.stream()
+        .mapToInt(Item::price)
+        .sum();
+  }
+}`, "\n")
+	cases := []struct {
+		name, severity, title, evidence, patch string
+		line                                   int
+		drop                                   bool
+		want                                   string
+		doubted                                bool
+	}{
+		{"value from a map lookup", "high", "Null dereference", "return b.name();", "", 4, false, "high", false},
+		{"value tested for null nearby", "high", "Possible NullPointerException", "return d.name();", "", 11, false, "high", false},
+		{"nothing makes it null", "high", "Null dereference on some path", "return c.name();", "", 7, false, "low", true},
+		{"the change removed a null check", "high", "Null header not handled", "return c.name();", "-  if (c == null) return;\n", 7, false, "high", false},
+		{"only describes the change", "medium", "Improved variable naming", "return c.name();", "", 7, false, "low", true},
+		{"an ordinary claim is untouched", "high", "Wrong total for empty orders", "return c.name();", "", 7, false, "high", false},
+		{"a quote joined from several lines", "medium", "Sum ignores discounts", "return items.stream().mapToInt(Item::price).sum();", "", 14, false, "medium", false},
+		{"no quote at all", "high", "Wrong total", "", "", 7, false, "low", true},
+		{"quote not in the file", "high", "Wrong total", "return x.total();", "", 7, true, "", false},
+		{"quote far away", "high", "Wrong total", "class A {", "", 16, true, "", false},
+		{"vague advice", "medium", "Consider adding validation", "return c.name();", "", 7, true, "", false},
+		{"line outside the file", "high", "Wrong total", "return c.name();", "", 99, true, "", false},
+	}
+	for _, c := range cases {
+		drop, sev, doubt := judge(code, c.patch, c.line, c.severity, c.title, c.evidence)
+		if (drop != "") != c.drop || (!c.drop && (sev != c.want || (doubt != "") != c.doubted)) {
+			t.Errorf("%s: drop %q, severity %q, doubt %q", c.name, drop, sev, doubt)
+		}
+	}
+}
+
+// A commit adds a swallowed exception; a later commit removes it, which resolves the issue.
+func TestReviewAndResolve(t *testing.T) {
+	dir := t.TempDir()
+	run := func(args ...string) {
+		cmd := exec.Command("git", append([]string{"-C", dir, "-c", "user.name=T", "-c", "user.email=t@t"}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %s", args, out)
+		}
+	}
+	path := filepath.Join(dir, "svc", "src", "main", "java", "A.java")
+	os.MkdirAll(filepath.Dir(path), 0o755)
+	write := func(s string) { os.WriteFile(path, []byte(s), 0o644) }
+	run("init", "-q")
+	write("class A {\n  void a() {\n    run();\n  }\n}\n")
+	run("add", ".")
+	run("commit", "-q", "-m", "Add A")
+	write("class A {\n  void a() {\n    try {\n      run();\n    } catch (Exception e) {\n    }\n  }\n}\n")
+	run("commit", "-q", "-am", "Guard run")
+	bad := head(t, dir)
+	write("class A {\n  void a() {\n    try {\n      run();\n    } catch (Exception e) {\n      throw new IllegalStateException(e);\n    }\n  }\n}\n")
+	run("commit", "-q", "-am", "Rethrow")
+	fix := head(t, dir)
+
+	repo, _ := git.Open(dir)
+	st, err := store.Open(t.TempDir(), "r")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	r := &Reviewer{Repo: repo, Store: st, MaxFiles: 8}
+	if err := r.Review(context.Background(), bad[:7], Options{}); err != nil { // a short id is stored under the full one
+		t.Fatal(err)
+	}
+	fs := st.Findings(bad)
+	if len(fs) != 1 || fs[0].Rule != "empty-catch" || fs[0].Line != 5 || fs[0].State != "open" {
+		t.Fatalf("findings: %+v", fs)
+	}
+	if rv, _ := st.GetReview(bad); rv.Status != "done" {
+		t.Errorf("status %q", rv.Status)
+	}
+	if err := r.Review(context.Background(), fix, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := st.Findings(bad); got[0].State != "resolved" || len(st.Findings(fix)) != 0 {
+		t.Errorf("after the fix: %+v, fix findings %+v", got, st.Findings(fix))
+	}
+}
+
+func head(t *testing.T, dir string) string {
+	out, err := exec.Command("git", "-C", dir, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.TrimSpace(string(out))
+}
