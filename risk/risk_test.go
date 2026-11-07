@@ -121,9 +121,20 @@ func TestLearnsThePattern(t *testing.T) {
 			r.commit(fmt.Sprint("Tidy ", i), map[string]string{fmt.Sprintf("src/main/java/T%d.java", i): lines(1, "")})
 		}
 	}
+	// A large javadoc-only commit: many lines, no code. It must not look risky.
+	var doc strings.Builder
+	doc.WriteString("/**\n")
+	for i := 0; i < 300; i++ {
+		fmt.Fprintf(&doc, " * Explains part %d of the class in more words.\n", i)
+	}
+	doc.WriteString(" */\nclass Doc {}\n")
+	docs := r.commit("Improve javadoc", map[string]string{"src/main/java/Doc.java": doc.String()})
 	m := Train(r.open(), Options{})
 	if !m.Ready || m.AUC < 0.6 || m.Positives < 12 || len(m.Signals) != 3 {
 		t.Fatalf("%+v", m)
+	}
+	if m.Level(docs) == "high" {
+		t.Errorf("a javadoc-only commit is ranked high (score %.2f)", m.Scores[docs])
 	}
 	high := 0
 	for _, sha := range risky {
@@ -140,7 +151,7 @@ func TestLearnsThePattern(t *testing.T) {
 }
 
 func TestHelpers(t *testing.T) {
-	if got := removed("@@ -3,3 +3,2 @@\n a\n-b\n-c\n+d\n\\ No newline\n"); fmt.Sprint(got) != "[4 5]" {
+	if got := removed("@@ -3,4 +3,2 @@\n a\n-b();\n-// c\n-d();\n+e();\n\\ No newline\n"); fmt.Sprint(got) != "[4 5 6]" {
 		t.Errorf("removed %v", got)
 	}
 	if got := ranges([]int{1, 2, 3, 7, 9, 10}); fmt.Sprint(got) != "[[1 3] [7 7] [9 10]]" {

@@ -88,13 +88,14 @@ func Train(repo *git.Repo, opt Options) *Model {
 	for sha := range opt.Known {
 		labels[sha] = true
 	}
-	feats := Features(hist)
+	code, _ := repo.CodeChurn(opt.Commits) // nil if it fails: then all changed lines count
+	feats := Features(hist, code)
 	var x [][]float64
 	var y []float64
 	var shas []string
 	for i, c := range hist {
-		if c.Parents > 1 || len(c.Files) == 0 {
-			continue // merges and empty commits say nothing about one change
+		if c.Parents > 1 || len(c.Files) == 0 || massChange(feats[i]) {
+			continue // merges, empty commits and mass changes (reformatting, renames) say nothing about one change
 		}
 		x = append(x, feats[i])
 		y = append(y, b2f(labels[c.SHA]))
@@ -158,7 +159,18 @@ func Labels(repo *git.Repo, hist []git.CommitStat, blames int) map[string]bool {
 			if ch.Status != "modified" || !strings.HasSuffix(ch.Path, ".java") || isTest(ch.Path) {
 				continue
 			}
-			for _, r := range ranges(removed(ch.Patch)) {
+			before, ok := repo.FileAt(c.SHA+"~1", ch.Path)
+			if !ok {
+				continue
+			}
+			code := git.CodeLines(before)
+			var lines []int
+			for _, l := range removed(ch.Patch) {
+				if l >= 1 && l <= len(code) && code[l-1] { // code only: a fix that also tidies a comment does not blame it
+					lines = append(lines, l)
+				}
+			}
+			for _, r := range ranges(lines) {
 				if blames == 0 {
 					break
 				}
@@ -215,19 +227,33 @@ func isTest(p string) bool {
 	return strings.Contains("/"+p, "/src/test/") || strings.HasSuffix(b, "Test.java") || strings.HasSuffix(b, "Tests.java")
 }
 
-// Features describes each commit with what was known when it was made, walking from the oldest.
-func Features(hist []git.CommitStat) [][]float64 {
+// massLines and massFiles mark a mass change, such as reformatting or a large rename, which is left out of learning.
+const massLines, massFiles = 3000, 100
+
+func massChange(f []float64) bool {
+	return math.Expm1(f[0])+math.Expm1(f[1]) > massLines || math.Expm1(f[2]) > massFiles
+}
+
+// Features describes each commit with what was known when it was made, walking from the oldest. With code (lines
+// of Java code per commit and file, from git.CodeChurn), sizes count only code: comments, javadoc, imports, blank
+// lines and other files do not make a change look bigger.
+func Features(hist []git.CommitStat, code map[string]map[string][2]int) [][]float64 {
 	changes, fixes, authors := map[string]int{}, map[string]int{}, map[string]int{}
 	out := make([][]float64, len(hist))
 	for i, c := range hist {
 		added, deleted, java, tests, maxChanges, sumFixes := 0, 0, 0, 0, 0, 0
 		var sizes []float64
+		files := 0
 		for _, f := range c.Files {
-			if f.Added > 0 {
-				added += f.Added
+			a, d := max(0, f.Added), max(0, f.Deleted)
+			if code != nil {
+				lines := code[c.SHA][f.Path] // zero when the file changed no code
+				a, d = lines[0], lines[1]
 			}
-			if f.Deleted > 0 {
-				deleted += f.Deleted
+			added += a
+			deleted += d
+			if a+d > 0 {
+				files++
 			}
 			if strings.HasSuffix(f.Path, ".java") {
 				java++
@@ -237,14 +263,14 @@ func Features(hist []git.CommitStat) [][]float64 {
 			}
 			maxChanges = max(maxChanges, changes[f.Path])
 			sumFixes += fixes[f.Path]
-			sizes = append(sizes, float64(max(0, f.Added)+max(0, f.Deleted)))
+			sizes = append(sizes, float64(a+d))
 		}
 		share := 0.0
 		if len(c.Files) > 0 {
 			share = float64(java) / float64(len(c.Files))
 		}
 		fix := IsFix(c.Subject)
-		out[i] = []float64{lg(added), lg(deleted), lg(len(c.Files)), share, float64(tests), lg(maxChanges), lg(sumFixes),
+		out[i] = []float64{lg(added), lg(deleted), lg(files), share, float64(tests), lg(maxChanges), lg(sumFixes),
 			b2f(fix), lg(authors[c.Author]), entropy(sizes)}
 		for _, f := range c.Files {
 			changes[f.Path]++
