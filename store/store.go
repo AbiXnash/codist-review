@@ -55,6 +55,11 @@ CREATE TABLE IF NOT EXISTS issues (
 	state      TEXT NOT NULL,          -- open, resolved
 	fixed_sha  TEXT NOT NULL DEFAULT ''
 );
+CREATE TABLE IF NOT EXISTS behaviour (
+	sha        TEXT PRIMARY KEY,
+	report     TEXT NOT NULL,         -- what running the changed methods before and after the commit showed
+	updated    INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS incidents (
 	id         INTEGER PRIMARY KEY,
 	created    INTEGER NOT NULL,
@@ -444,4 +449,37 @@ func (s *Store) DeleteIncident(id int64) error {
 func (s *Store) SetIncidentTitle(id int64, title string) error {
 	_, err := s.db.Exec(`UPDATE incidents SET title=? WHERE id=?`, title, id)
 	return err
+}
+
+// SetBehaviour saves a commit's behaviour report, replacing an earlier one.
+func (s *Store) SetBehaviour(sha string, report json.RawMessage) error {
+	_, err := s.db.Exec(`INSERT INTO behaviour (sha, report, updated) VALUES (?,?,?)
+		ON CONFLICT(sha) DO UPDATE SET report=excluded.report, updated=excluded.updated`, sha, string(orEmpty(report)), time.Now().UnixMilli())
+	return err
+}
+
+// Behaviour reads a commit's behaviour report.
+func (s *Store) Behaviour(sha string) (json.RawMessage, bool) {
+	var report string
+	if err := s.db.QueryRow(`SELECT report FROM behaviour WHERE sha=?`, sha).Scan(&report); err != nil {
+		return nil, false
+	}
+	return json.RawMessage(report), true
+}
+
+// BehaviourDone lists the commits that have a behaviour report.
+func (s *Store) BehaviourDone() map[string]bool {
+	out := map[string]bool{}
+	rows, err := s.db.Query(`SELECT sha FROM behaviour`)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var sha string
+		if rows.Scan(&sha) == nil {
+			out[sha] = true
+		}
+	}
+	return out
 }

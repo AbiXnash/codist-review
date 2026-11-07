@@ -1,6 +1,7 @@
 package store
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -108,5 +109,22 @@ func TestReplaceFindingsIsAllOrNothing(t *testing.T) {
 	}
 	if len(s.Findings("a")) != 1 {
 		t.Error("a failed replace changed the findings")
+	}
+}
+
+func TestBehaviour(t *testing.T) {
+	s, _ := Open(t.TempDir(), "repo")
+	defer s.Close()
+	if _, ok := s.Behaviour("a"); ok || len(s.BehaviourDone()) != 0 {
+		t.Error("nothing stored yet")
+	}
+	s.SetBehaviour("a", json.RawMessage(`{"status":"skipped"}`))
+	s.SetBehaviour("a", json.RawMessage(`{"status":"done"}`))
+	if r, ok := s.Behaviour("a"); !ok || string(r) != `{"status":"done"}` || !s.BehaviourDone()["a"] {
+		t.Errorf("%s %v", r, ok)
+	}
+	s.Close()
+	if s.SetBehaviour("b", nil) == nil || len(s.BehaviourDone()) != 0 {
+		t.Error("closed store")
 	}
 }
