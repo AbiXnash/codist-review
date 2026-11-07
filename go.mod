@@ -5,7 +5,7 @@ go 1.26.0
 require (
 	github.com/AbiXnash/codist-git v0.1.0
 	github.com/AbiXnash/codist-java v0.1.0
-	github.com/AbiXnash/codist-model v0.1.0
+	github.com/AbiXnash/codist-model v0.3.0
 	modernc.org/sqlite v1.61.1
 )
 

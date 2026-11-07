@@ -2,8 +2,8 @@ github.com/AbiXnash/codist-git v0.1.0 h1:KSKTAwiiIjyll3m087ccLIsVxONBJyl59FsMAd1
 github.com/AbiXnash/codist-git v0.1.0/go.mod h1:RIqrSdD6PQGw3PA6QT+PyPnZPqUxg5Tw+3TUe6iIrQk=
 github.com/AbiXnash/codist-java v0.1.0 h1:PUEjU8x4SI/JcAs2Lb93jUXp8v3md7pV7kPbF7ba9E8=
 github.com/AbiXnash/codist-java v0.1.0/go.mod h1:bIJs2YZpqp/4jvW2Uss/ZCBvAOIkwHcXDz7m6W3HNMs=
-github.com/AbiXnash/codist-model v0.1.0 h1:hSjI6WC/SZ/Uo4FOtHTsQI15HXlXKpGCn4wh5StqQXs=
-github.com/AbiXnash/codist-model v0.1.0/go.mod h1:aChuSiyXbY45Ds2jZB6vgUEAw0DCQ56PAyQ2qKpblFM=
+github.com/AbiXnash/codist-model v0.3.0 h1:0yveUbPXee5iCF7VS7uo5JFqlJnbEmYEBQ38oG0iHqU=
+github.com/AbiXnash/codist-model v0.3.0/go.mod h1:aChuSiyXbY45Ds2jZB6vgUEAw0DCQ56PAyQ2qKpblFM=
 github.com/dustin/go-humanize v1.1.0 h1:dbKTrvD0klcbBV/h4AWJdMuZogJACoMlvWIWZ5b2xWg=
 github.com/dustin/go-humanize v1.1.0/go.mod h1:hc1CvRkJMsgxqjmjMQF3QNRAZBwY8AXBAzKYoSX9sFI=
 github.com/google/pprof v0.0.0-20261016150608-1facf8f91b50 h1:PlNWJRxu5APSV0pWqfIsZ0qt9OOGHSWfZQ4zvx+WgWs=

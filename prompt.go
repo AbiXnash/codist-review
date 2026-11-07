@@ -3,6 +3,7 @@ package review
 import (
 	"context"
 	_ "embed"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -54,12 +55,23 @@ type modelFinding struct {
 // prompt distracts a small model.
 const maxWholeFile = 300
 
-func (r *Reviewer) modelReview(ctx context.Context, c git.Commit, ch git.FileChange, f *java.File, known []store.Finding) ([]store.Finding, int, error) {
+func (r *Reviewer) modelReview(ctx context.Context, c git.Commit, ch git.FileChange, f *java.File, known []store.Finding, related string, st *Stats) ([]store.Finding, int, error) {
 	var out struct {
 		Findings []modelFinding `json:"findings"`
 	}
-	if _, err := r.Model.ChatJSON(ctx, systemPrompt, userPrompt(c, ch, f, known), schema, &out); err != nil {
-		return nil, 0, err
+	prompt := userPrompt(c, ch, f, known) + related
+	key := cacheKey(r.Model.Name, prompt)
+	if raw, ok := r.Store.CachedReply(key); ok && json.Unmarshal(raw, &out) == nil {
+		st.Cached++
+	} else {
+		u, err := r.Model.ChatJSON(ctx, systemPrompt, prompt, schema, &out)
+		if err != nil {
+			return nil, 0, err
+		}
+		st.add(u)
+		if raw, err := json.Marshal(out); err == nil {
+			_ = r.Store.SetCachedReply(key, raw)
+		}
 	}
 	var got []store.Finding
 	dropped := 0

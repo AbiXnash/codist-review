@@ -60,6 +60,21 @@ CREATE TABLE IF NOT EXISTS behaviour (
 	report     TEXT NOT NULL,         -- what running the changed methods before and after the commit showed
 	updated    INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS model_cache (
+	key        TEXT PRIMARY KEY,      -- model, prompt version and the exact prompt, hashed
+	reply      TEXT NOT NULL,
+	created    INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS review_stats (
+	sha        TEXT PRIMARY KEY,
+	stats      TEXT NOT NULL          -- what the model cost for this commit: calls, tokens, time
+);
+CREATE TABLE IF NOT EXISTS feedback (
+	key        TEXT PRIMARY KEY,      -- the issue key the person judged
+	verdict    TEXT NOT NULL,         -- useful or wrong
+	note       TEXT NOT NULL DEFAULT '',
+	updated    INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS incidents (
 	id         INTEGER PRIMARY KEY,
 	created    INTEGER NOT NULL,
@@ -215,7 +230,8 @@ func (s *Store) Findings(sha string) []Finding {
 // Counts is how many findings each reviewed commit has, by severity.
 func (s *Store) Counts() map[string]map[string]int {
 	out := map[string]map[string]int{}
-	rows, err := s.db.Query(`SELECT sha, severity, COUNT(*) FROM findings GROUP BY sha, severity`)
+	rows, err := s.db.Query(`SELECT f.sha, f.severity, COUNT(*) FROM findings f LEFT JOIN issues i ON i.key = f.key
+		WHERE COALESCE(i.state, 'open') != 'ignored' GROUP BY f.sha, f.severity`)
 	if err != nil {
 		return out
 	}
@@ -479,6 +495,91 @@ func (s *Store) BehaviourDone() map[string]bool {
 		var sha string
 		if rows.Scan(&sha) == nil {
 			out[sha] = true
+		}
+	}
+	return out
+}
+
+// CachedReply is a model reply kept for an exact prompt.
+func (s *Store) CachedReply(key string) (json.RawMessage, bool) {
+	var reply string
+	if err := s.db.QueryRow(`SELECT reply FROM model_cache WHERE key=?`, key).Scan(&reply); err != nil {
+		return nil, false
+	}
+	return json.RawMessage(reply), true
+}
+
+// SetCachedReply keeps a model reply for its prompt.
+func (s *Store) SetCachedReply(key string, reply json.RawMessage) error {
+	_, err := s.db.Exec(`INSERT INTO model_cache (key, reply, created) VALUES (?,?,?)
+		ON CONFLICT(key) DO UPDATE SET reply=excluded.reply, created=excluded.created`, key, string(reply), time.Now().UnixMilli())
+	return err
+}
+
+// SetStats saves what the model cost for one commit.
+func (s *Store) SetStats(sha string, stats json.RawMessage) error {
+	_, err := s.db.Exec(`INSERT INTO review_stats (sha, stats) VALUES (?,?) ON CONFLICT(sha) DO UPDATE SET stats=excluded.stats`, sha, string(stats))
+	return err
+}
+
+// Stats reads what the model cost for one commit.
+func (s *Store) Stats(sha string) (json.RawMessage, bool) {
+	var stats string
+	if err := s.db.QueryRow(`SELECT stats FROM review_stats WHERE sha=?`, sha).Scan(&stats); err != nil {
+		return nil, false
+	}
+	return json.RawMessage(stats), true
+}
+
+// AllStats reads every commit's model cost.
+func (s *Store) AllStats() map[string]json.RawMessage {
+	out := map[string]json.RawMessage{}
+	rows, err := s.db.Query(`SELECT sha, stats FROM review_stats`)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var sha, stats string
+		if rows.Scan(&sha, &stats) == nil {
+			out[sha] = json.RawMessage(stats)
+		}
+	}
+	return out
+}
+
+// Feedback is a person's judgement of an issue.
+type Feedback struct {
+	Verdict, Note string
+	Updated       time.Time
+}
+
+// SetFeedback records a judgement of an issue: "useful" or "wrong". An empty verdict removes it.
+func (s *Store) SetFeedback(key, verdict, note string) error {
+	if verdict == "" {
+		_, err := s.db.Exec(`DELETE FROM feedback WHERE key=?`, key)
+		return err
+	}
+	_, err := s.db.Exec(`INSERT INTO feedback (key, verdict, note, updated) VALUES (?,?,?,?)
+		ON CONFLICT(key) DO UPDATE SET verdict=excluded.verdict, note=excluded.note, updated=excluded.updated`, key, verdict, note, time.Now().UnixMilli())
+	return err
+}
+
+// AllFeedback reads every judgement, by issue key.
+func (s *Store) AllFeedback() map[string]Feedback {
+	out := map[string]Feedback{}
+	rows, err := s.db.Query(`SELECT key, verdict, note, updated FROM feedback`)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var k string
+		var f Feedback
+		var at int64
+		if rows.Scan(&k, &f.Verdict, &f.Note, &at) == nil {
+			f.Updated = fromUnix(at)
+			out[k] = f
 		}
 	}
 	return out

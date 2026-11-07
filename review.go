@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha1"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"regexp"
@@ -24,6 +25,7 @@ type Reviewer struct {
 	Store    *store.Store
 	Model    *model.Client // nil means rules only
 	MaxFiles int
+	Callers  bool // show the model the code in other files that calls the changed methods
 	Ignored  func(path string) bool
 }
 
@@ -79,6 +81,8 @@ func (r *Reviewer) Review(ctx context.Context, sha string, opt Options) error {
 		}
 		targets = append(targets, target{c, f})
 	}
+	stats := Stats{PromptVersion: PromptVersion, Model: modelName}
+	findings = r.hideWrong(findings, &stats)
 	if err := r.Store.ReplaceFindings(sha, findings); err != nil {
 		return fail(err)
 	}
@@ -89,6 +93,14 @@ func (r *Reviewer) Review(ctx context.Context, sha string, opt Options) error {
 	}
 	if r.Model != nil && !opt.RulesOnly {
 		commit, _ := r.Repo.Get(sha)
+		var related map[string]string
+		if r.Callers {
+			var changed []git.FileChange
+			for _, t := range targets {
+				changed = append(changed, t.change)
+			}
+			related = r.callerContext(sha, changed)
+		}
 		reviewed := 0
 		for _, t := range targets {
 			if ctx.Err() != nil {
@@ -102,7 +114,7 @@ func (r *Reviewer) Review(ctx context.Context, sha string, opt Options) error {
 				break
 			}
 			reviewed++
-			got, dropped, err := r.modelReview(ctx, commit, t.change, t.file, findings)
+			got, dropped, err := r.modelReview(ctx, commit, t.change, t.file, findings, related[t.change.Path], &stats)
 			if err != nil {
 				notes = append(notes, "The model could not review "+t.change.Path+": "+err.Error())
 				continue
@@ -110,11 +122,19 @@ func (r *Reviewer) Review(ctx context.Context, sha string, opt Options) error {
 			if dropped > 0 {
 				slog.Info("dropped model findings", "sha", sha[:7], "path", t.change.Path, "count", dropped)
 			}
-			findings = append(findings, got...)
+			findings = append(findings, r.hideWrong(got, &stats)...)
 			_ = r.Store.ReplaceFindings(sha, findings) // show progress file by file
 		}
 	}
 	r.resolve(sha, changes)
+	if stats.Hidden > 0 {
+		notes = append(notes, fmt.Sprintf("%d finding%s not shown because %s marked wrong before.", stats.Hidden, plural(stats.Hidden), map[bool]string{true: "it was", false: "they were"}[stats.Hidden == 1]))
+	}
+	if modelName != "" {
+		if raw, err := json.Marshal(stats); err == nil {
+			_ = r.Store.SetStats(sha, raw)
+		}
+	}
 	return r.Store.SetReview(store.Review{SHA: sha, Status: "done", Model: modelName, Note: strings.Join(notes, " "), Started: started, Finished: time.Now()})
 }
 
@@ -202,4 +222,11 @@ func (r *Reviewer) Baseline(files map[string][]byte) (int, error) {
 		return 0, err
 	}
 	return len(findings), r.Store.SetReview(store.Review{SHA: BaselineSHA, Status: "done", Note: "Checked the whole code on first run.", Started: started, Finished: time.Now()})
+}
+
+func plural(n int) string {
+	if n == 1 {
+		return " was"
+	}
+	return "s were"
 }

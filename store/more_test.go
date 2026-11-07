@@ -128,3 +128,34 @@ func TestBehaviour(t *testing.T) {
 		t.Error("closed store")
 	}
 }
+
+func TestCacheStatsFeedback(t *testing.T) {
+	s, _ := Open(t.TempDir(), "repo")
+	defer s.Close()
+	if _, ok := s.CachedReply("k"); ok {
+		t.Error("empty cache")
+	}
+	s.SetCachedReply("k", json.RawMessage(`{"a":1}`))
+	if r, ok := s.CachedReply("k"); !ok || string(r) != `{"a":1}` {
+		t.Error("cache")
+	}
+	s.SetStats("x", json.RawMessage(`{"calls":2}`))
+	if r, ok := s.Stats("x"); !ok || string(r) != `{"calls":2}` || len(s.AllStats()) != 1 {
+		t.Error("stats")
+	}
+	if _, ok := s.Stats("y"); ok {
+		t.Error("no stats")
+	}
+	s.SetFeedback("i", "wrong", "noise")
+	if f := s.AllFeedback()["i"]; f.Verdict != "wrong" || f.Note != "noise" || f.Updated.IsZero() {
+		t.Errorf("%+v", f)
+	}
+	s.SetFeedback("i", "", "")
+	if len(s.AllFeedback()) != 0 {
+		t.Error("feedback removed")
+	}
+	s.Close()
+	if len(s.AllStats()) != 0 || len(s.AllFeedback()) != 0 || s.SetStats("x", nil) == nil || s.SetCachedReply("k", nil) == nil {
+		t.Error("closed store")
+	}
+}
