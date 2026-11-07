@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"log/slog"
 	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -27,7 +29,11 @@ type Reviewer struct {
 	MaxFiles int
 	Callers  bool // show the model the code in other files that calls the changed methods
 	Learn    bool // show the model findings this team marked wrong or useful, as examples
-	Ignored  func(path string) bool
+	// Contracts shows the model the signature and javadoc of the methods the changed code calls in other files.
+	Contracts bool
+	Rules     string // the team's own rules for the model, from .codist/rules.md
+
+	Ignored func(path string) bool
 }
 
 // Options says how much of a review to do.
@@ -57,6 +63,9 @@ func (r *Reviewer) Review(ctx context.Context, sha string, opt Options) error {
 	changes, err := r.Repo.Changes(sha)
 	if err != nil {
 		return fail(err)
+	}
+	for i := range changes {
+		changes[i].Added = withDeletions(changes[i].Added, changes[i].Patch)
 	}
 	type target struct {
 		change git.FileChange
@@ -99,13 +108,25 @@ func (r *Reviewer) Review(ctx context.Context, sha string, opt Options) error {
 		if r.Learn {
 			learned = r.feedbackExamples()
 		}
-		if r.Callers {
+		related = map[string]string{}
+		if r.Callers || r.Contracts {
 			var changed []git.FileChange
 			for _, t := range targets {
 				changed = append(changed, t.change)
 			}
-			related = r.callerContext(sha, changed)
+			cd := r.codeAt(sha)
+			if r.Callers {
+				for p, v := range r.callerContext(cd, changed) {
+					related[p] += v
+				}
+			}
+			if r.Contracts {
+				for p, v := range r.contractContext(cd, changed) {
+					related[p] += v
+				}
+			}
 		}
+		learned += rulesSection(r.Rules)
 		reviewed := 0
 		for _, t := range targets {
 			if ctx.Err() != nil {
@@ -235,3 +256,45 @@ func plural(n int) string {
 	}
 	return "s were"
 }
+
+// withDeletions adds to a file's added lines the lines on either side of each place where lines were only deleted,
+// so a commit that removes a check (an owner filter, a null test) is still reviewed there.
+func withDeletions(added []int, patch string) []int {
+	seen := map[int]bool{}
+	for _, l := range added {
+		seen[l] = true
+	}
+	out := append([]int(nil), added...)
+	mark := func(l int) {
+		if l >= 1 && !seen[l] {
+			seen[l] = true
+			out = append(out, l)
+		}
+	}
+	n, deleting := 0, false
+	for _, l := range strings.Split(patch, "\n") {
+		if deleting && !strings.HasPrefix(l, "-") { // a run of deleted lines ends: pure deletion unless lines replace it
+			if !strings.HasPrefix(l, "+") {
+				mark(n - 1)
+				mark(n)
+			}
+			deleting = false
+		}
+		switch {
+		case strings.HasPrefix(l, "@@"):
+			if m := newStart.FindStringSubmatch(l); m != nil {
+				n, _ = strconv.Atoi(m[1])
+			}
+		case n == 0: // file headers before the first hunk
+		case strings.HasPrefix(l, "-"):
+			deleting = true
+		case strings.HasPrefix(l, "\\"):
+		default: // added or unchanged
+			n++
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+var newStart = regexp.MustCompile(`^@@ -\d+(?:,\d+)? \+(\d+)`)

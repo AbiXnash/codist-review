@@ -61,6 +61,8 @@ var (
 	nullClaim   = regexp.MustCompile(`(?i)\bnull|\bnpe\b|nullpointer`)
 	receiver    = regexp.MustCompile(`\b([A-Za-z_]\w*)\s*(?:\.\s*[A-Za-z_]\w*|\[)`)
 	removedNull = regexp.MustCompile(`(?m)^-[^-].*\bnull\b`)
+	neverNull   = regexp.MustCompile(`\.(orElseThrow|orElse|orElseGet|requireNonNull)\(|\bnew\s`)
+	onlyMessage = regexp.MustCompile(`(?i)commit message|message (does not|doesn't|do not) match|contradicts the (commit|message)|mismatch`)
 )
 
 var severities = []string{"critical", "high", "medium", "low", "info"}
@@ -89,6 +91,8 @@ func judge(lines []string, patch string, line int, severity, title, evidence str
 			doubt = "This describes the change and names no problem in it."
 		case nullClaim.MatchString(title) && !nullBacked(evidence, lines, line, patch):
 			doubt = "Codist could not find where this value becomes null in this code."
+		case onlyMessage.MatchString(title):
+			doubt = "This says the commit message and the code disagree, but not what now goes wrong."
 		}
 	}
 	if !slices.Contains(severities, severity) {
@@ -113,9 +117,25 @@ func nullBacked(evidence string, lines []string, line int, patch string) bool {
 		v := regexp.QuoteMeta(m[1])
 		source := `(?m)\b` + v + `\s*[!=]=\s*null\b|\bnull\s*[!=]=\s*` + v + `\b|\b` + v + `\s*=\s*null\b|@Nullable\b[^;\n]*\b` + v +
 			`\b|\b` + v + `\s*=[^;\n]*\.(get|find\w*|remove|poll|peek\w*|getProperty|getenv|getParameter|getHeader|getAttribute|lookup)\(`
-		if regexp.MustCompile(source).MatchString(near) {
-			return true
+		for _, hit := range regexp.MustCompile(source).FindAllString(near, -1) {
+			if !neverNull.MatchString(lineOf(near, hit)) { // orElseThrow() or new never gives null
+				return true
+			}
 		}
 	}
 	return false
+}
+
+// lineOf is the whole line of text that holds part.
+func lineOf(text, part string) string {
+	i := strings.Index(text, part)
+	if i < 0 {
+		return part
+	}
+	start := strings.LastIndex(text[:i], "\n") + 1
+	end := strings.Index(text[i:], "\n")
+	if end < 0 {
+		return text[start:]
+	}
+	return text[start : i+end]
 }

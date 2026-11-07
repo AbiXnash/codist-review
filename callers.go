@@ -19,20 +19,11 @@ const (
 
 // callerContext gives, for each changed file, a prompt section with the methods in other files that call the
 // methods the commit changed there, from the call graph of the code at sha.
-func (r *Reviewer) callerContext(sha string, changes []git.FileChange) map[string]string {
-	files, err := r.Repo.Files(sha)
-	if err != nil {
+func (r *Reviewer) callerContext(cd *code, changes []git.FileChange) map[string]string {
+	if cd == nil {
 		return nil
 	}
-	var paths []string
-	for _, f := range files {
-		if strings.HasSuffix(f, ".java") && !strings.Contains(f, "/src/test/") && (r.Ignored == nil || !r.Ignored(f)) {
-			paths = append(paths, f)
-		}
-	}
-	sources := r.Repo.ReadAll(sha, paths)
-	ix := java.Build(sources, nil)
-	calls := java.BuildCallGraph(sources, ix.Types).Calls()
+	sources, ix, calls := cd.sources, cd.ix, cd.calls
 	out := map[string]string{}
 	for _, ch := range changes {
 		changed := map[string]bool{} // method names the commit changed in this file
@@ -73,4 +64,27 @@ func (r *Reviewer) callerContext(sha string, changes []git.FileChange) map[strin
 		out[ch.Path] = b.String()
 	}
 	return out
+}
+
+// code is the main Java code at one commit with its index and call graph.
+type code struct {
+	sources map[string][]byte
+	ix      *java.Index
+	calls   []java.MethodCall
+}
+
+func (r *Reviewer) codeAt(sha string) *code {
+	files, err := r.Repo.Files(sha)
+	if err != nil {
+		return nil
+	}
+	var paths []string
+	for _, f := range files {
+		if strings.HasSuffix(f, ".java") && !strings.Contains(f, "/src/test/") && (r.Ignored == nil || !r.Ignored(f)) {
+			paths = append(paths, f)
+		}
+	}
+	sources := r.Repo.ReadAll(sha, paths)
+	ix := java.Build(sources, nil)
+	return &code{sources, ix, java.BuildCallGraph(sources, ix.Types).Calls()}
 }

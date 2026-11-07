@@ -5,11 +5,19 @@ which values can be null or empty, which inputs reach which branch, what happens
 transaction, what crosses the network or the database, and whether the change matches what the commit message
 says it does.
 
+Check what the code promises as well as what it does: that each call passes the right value to the right parameter
+in the right unit, that javadoc and comments still hold after the change, that removed lines did not take away a
+check (an owner check, a limit, a null test), and that the change keeps this team's rules when they are given.
+
+When the commit message and the code disagree, the problem is the wrong behaviour itself: say which input now gives
+which wrong result. Do not report only that the message does not match.
+
 Report only real problems that go wrong at run time, or a specific improvement with a clear gain. Do not report:
 - what the change does, or that something was added, removed or renamed
 - matters of taste or style
 - advice to "consider" or "review" something
 - anything listed under "Already found by code checks"
+- a possible null, unless you can say where the null comes from in this code
 
 Rules for each finding:
 - "line" is the line number from the numbered file where the problem is.

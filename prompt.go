@@ -151,7 +151,7 @@ func shownRanges(f *java.File, changed map[int]bool) [][2]int {
 		for _, m := range t.Methods {
 			for l := m.Line; l <= m.End; l++ {
 				if changed[l] {
-					rs = append(rs, [2]int{max(1, m.Line-2), min(n, m.End+1)})
+					rs = append(rs, [2]int{max(1, docStart(f.Lines, m.Line)-1), min(n, m.End+1)}) // with its javadoc
 					break
 				}
 			}

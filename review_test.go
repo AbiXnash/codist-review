@@ -30,6 +30,10 @@ func TestJudge(t *testing.T) {
         .mapToInt(Item::price)
         .sum();
   }
+  long f(long id) {
+    Order o = repo.findById(id).orElseThrow();
+    return o.total();
+  }
 }`, "\n")
 	cases := []struct {
 		name, severity, title, evidence, patch string
@@ -49,6 +53,8 @@ func TestJudge(t *testing.T) {
 		{"quote not in the file", "high", "Wrong total", "return x.total();", "", 7, true, "", false},
 		{"quote far away", "high", "Wrong total", "class A {", "", 16, true, "", false},
 		{"vague advice", "medium", "Consider adding validation", "return c.name();", "", 7, true, "", false},
+		{"orElseThrow never gives null", "high", "NullPointerException risk", "return o.total();", "", 20, false, "low", true},
+		{"only says the message disagrees", "high", "Commit message contradicts code change", "return c.name();", "", 7, false, "low", true},
 		{"line outside the file", "high", "Wrong total", "return c.name();", "", 99, true, "", false},
 	}
 	for _, c := range cases {
@@ -113,4 +119,15 @@ func head(t *testing.T, dir string) string {
 		t.Fatal(err)
 	}
 	return strings.TrimSpace(string(out))
+}
+
+func TestWithDeletions(t *testing.T) {
+	patch := "@@ -20,4 +20,3 @@ class A {\n     Order one(long c, long id) {\n         return orders.findById(id)\n-            .filter(o -> o.customerId() == c)\n             .orElseThrow();\n"
+	got := withDeletions(nil, patch)
+	if len(got) != 2 || got[0] != 21 || got[1] != 22 {
+		t.Fatalf("lines around the deletion: %v", got)
+	}
+	if got := withDeletions([]int{5}, "@@ -5,1 +5,1 @@\n-a\n+b\n"); len(got) != 1 || got[0] != 5 {
+		t.Fatalf("a replaced line: %v", got)
+	}
 }
