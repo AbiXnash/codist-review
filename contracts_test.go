@@ -3,6 +3,8 @@ package review
 import (
 	"strings"
 	"testing"
+
+	"github.com/AbiXnash/codist-review/store"
 )
 
 func TestJavadoc(t *testing.T) {
@@ -34,5 +36,37 @@ func TestJavadoc(t *testing.T) {
 	}
 	if rulesSection("  ") != "" || !strings.Contains(rulesSection("1. One discount per order."), "One discount") {
 		t.Fatal("rules section")
+	}
+}
+
+func TestTriage(t *testing.T) {
+	f := func(sev, title, doubt string) store.Finding {
+		return store.Finding{Source: "model", Severity: sev, Title: title, Doubt: doubt}
+	}
+	var ex []TriageExample
+	for i := 0; i < 12; i++ {
+		ex = append(ex, TriageExample{f("high", "Refund total can exceed amount paid", ""), true},
+			TriageExample{f("low", "Null or empty input not validated", ""), false})
+	}
+	if TrainTriage(ex[:10]) != nil {
+		t.Fatal("too few judged findings to trust")
+	}
+	tr := TrainTriage(ex)
+	if tr == nil {
+		t.Fatal("enough judged findings")
+	}
+	weak := tr.demote(f("medium", "Empty code input not validated", ""))
+	if weak.Severity != "low" || weak.Doubt == "" {
+		t.Fatalf("a finding like the wrong ones should become a note: %+v", weak)
+	}
+	if good := tr.demote(f("high", "Refund can exceed what was paid", "")); good.Severity != "high" {
+		t.Fatalf("a finding like the useful ones stays: %+v", good)
+	}
+	if rule := tr.demote(store.Finding{Source: "rule", Severity: "high", Title: "Null or empty input not validated"}); rule.Severity != "high" {
+		t.Fatal("code checks are never demoted")
+	}
+	var none *Triage
+	if none.demote(f("low", "x", "")).Severity != "low" {
+		t.Fatal("no triage changes nothing")
 	}
 }

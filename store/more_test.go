@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -157,5 +158,32 @@ func TestCacheStatsFeedback(t *testing.T) {
 	s.Close()
 	if len(s.AllStats()) != 0 || len(s.AllFeedback()) != 0 || s.SetStats("x", nil) == nil || s.SetCachedReply("k", nil) == nil {
 		t.Error("closed store")
+	}
+}
+
+func TestOpenRepoNamesByPathAndMovesOldData(t *testing.T) {
+	dir := t.TempDir()
+	a, b := filepath.Join(t.TempDir(), "shop"), filepath.Join(t.TempDir(), "shop")
+	if Name(a) == Name(b) || !strings.HasPrefix(Name(a), "shop-") {
+		t.Fatalf("same folder name, different places: %s %s", Name(a), Name(b))
+	}
+	old, err := Open(dir, "shop") // what an older Codist made
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := old.SetReview(Review{SHA: "abc", Status: "done"}); err != nil {
+		t.Fatal(err)
+	}
+	old.Close()
+	s, err := OpenRepo(dir, a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, ok := s.GetReview("abc"); !ok {
+		t.Fatal("the old database was not carried over")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "shop.db")); !os.IsNotExist(err) {
+		t.Fatal("the old file should have moved")
 	}
 }

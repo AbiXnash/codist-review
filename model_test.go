@@ -35,7 +35,7 @@ func (f *fakeModel) client(t *testing.T) *model.Client {
 		json.NewDecoder(r.Body).Decode(&req)
 		f.mu.Lock()
 		defer f.mu.Unlock()
-		f.prompts = append(f.prompts, req.Messages[1].Content)
+		f.prompts = append(f.prompts, req.Messages[0].Content+"\n"+req.Messages[1].Content) // instructions and file
 		if f.status != 0 && f.status != 200 {
 			w.WriteHeader(f.status)
 			io.WriteString(w, "busy")

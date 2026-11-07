@@ -55,16 +55,18 @@ type modelFinding struct {
 // prompt distracts a small model.
 const maxWholeFile = 300
 
-func (r *Reviewer) modelReview(ctx context.Context, c git.Commit, ch git.FileChange, f *java.File, known []store.Finding, related string, st *Stats) ([]store.Finding, int, error) {
+// modelReview asks the model about one file. system is the instructions plus what stays the same for every file (the
+// team's rules and judged examples), so the model server can reuse its work on that opening part between calls.
+func (r *Reviewer) modelReview(ctx context.Context, c git.Commit, ch git.FileChange, f *java.File, known []store.Finding, system, related string, st *Stats) ([]store.Finding, int, error) {
 	var out struct {
 		Findings []modelFinding `json:"findings"`
 	}
 	prompt := userPrompt(c, ch, f, known) + related
-	key := cacheKey(r.Model.Name, prompt)
+	key := cacheKey(r.Model.Name, system+"\x00"+prompt)
 	if raw, ok := r.Store.CachedReply(key); ok && json.Unmarshal(raw, &out) == nil {
 		st.Cached++
 	} else {
-		u, err := r.Model.ChatJSON(ctx, systemPrompt, prompt, schema, &out)
+		u, err := r.Model.ChatJSON(ctx, system, prompt, schema, &out)
 		if err != nil {
 			return nil, 0, err
 		}

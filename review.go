@@ -126,7 +126,11 @@ func (r *Reviewer) Review(ctx context.Context, sha string, opt Options) error {
 				}
 			}
 		}
-		learned += rulesSection(r.Rules)
+		system := systemPrompt + rulesSection(r.Rules) + learned // the same for every file, so it goes first
+		var triage *Triage
+		if r.Learn {
+			triage = r.triageFromFeedback()
+		}
 		reviewed := 0
 		for _, t := range targets {
 			if ctx.Err() != nil {
@@ -140,13 +144,16 @@ func (r *Reviewer) Review(ctx context.Context, sha string, opt Options) error {
 				break
 			}
 			reviewed++
-			got, dropped, err := r.modelReview(ctx, commit, t.change, t.file, findings, related[t.change.Path]+learned, &stats)
+			got, dropped, err := r.modelReview(ctx, commit, t.change, t.file, findings, system, related[t.change.Path], &stats)
 			if err != nil {
 				notes = append(notes, "The model could not review "+t.change.Path+": "+err.Error())
 				continue
 			}
 			if dropped > 0 {
 				slog.Info("dropped model findings", "sha", sha[:7], "path", t.change.Path, "count", dropped)
+			}
+			for i := range got {
+				got[i] = triage.demote(got[i])
 			}
 			findings = append(findings, r.hideWrong(got, &stats)...)
 			_ = r.Store.ReplaceFindings(sha, findings) // show progress file by file

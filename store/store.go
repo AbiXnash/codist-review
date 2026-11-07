@@ -3,7 +3,9 @@
 package store
 
 import (
+	"crypto/sha1"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -99,6 +101,32 @@ func Open(dir, repo string) (*Store, error) {
 		return nil, fmt.Errorf("database: %w", err)
 	}
 	return &Store{db: db}, nil
+}
+
+// Name is the name Codist keeps a repository's data under: its folder name and a short hash of its full path, so two
+// repositories with the same folder name in different places never share data.
+func Name(root string) string {
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		abs = root
+	}
+	h := sha1.Sum([]byte(abs))
+	return filepath.Base(abs) + "-" + hex.EncodeToString(h[:4])
+}
+
+// OpenRepo opens the database for the repository at root. A database an older Codist named by the folder alone is
+// moved to the new name the first time, so nothing already reviewed is lost.
+func OpenRepo(dir, root string) (*Store, error) {
+	name := Name(root)
+	old := filepath.Join(dir, filepath.Base(filepath.Clean(root)))
+	if _, err := os.Stat(filepath.Join(dir, name+".db")); os.IsNotExist(err) {
+		if _, err := os.Stat(old + ".db"); err == nil {
+			for _, ext := range []string{".db", ".db-wal", ".db-shm"} {
+				_ = os.Rename(old+ext, filepath.Join(dir, name+ext))
+			}
+		}
+	}
+	return Open(dir, name)
 }
 
 // Close closes the database.
