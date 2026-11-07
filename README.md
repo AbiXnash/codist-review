@@ -9,6 +9,11 @@ How [Codist](https://github.com/AbiXnash/codist) reviews a commit, and where it 
   issue is reported once and closed by the commit that fixes it.
 - **Baseline** checks the whole code the first time Codist runs on a repository, crediting each issue to the commit
   that last changed its line.
+- **Learning from feedback**: with `Learn` on, the model sees a few findings this team marked wrong or useful, as
+  examples of what not to report and what is worth reporting here.
+- **risk** learns from the repository's own history which commits tend to bring bugs (logistic regression, labels
+  from fix commits traced back with git blame), tests itself on the newest commits, and is used only when it ranks
+  clearly better than chance.
 - **store** keeps reviews, findings, issues and incidents in one SQLite file, through a pure-Go driver.
 
 ```go

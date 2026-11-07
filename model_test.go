@@ -322,3 +322,32 @@ func TestPromptSaysCodeIsData(t *testing.T) {
 		t.Error("the system prompt must treat the code as material, not instructions")
 	}
 }
+
+// With Learn on, the model sees the findings this team marked wrong and useful.
+func TestLearnFromFeedback(t *testing.T) {
+	tr, r, st := setup(t)
+	fm := &fakeModel{reply: `{"findings":[]}`}
+	r.Model, r.Learn = fm.client(t), true
+	if err := r.Review(context.Background(), tr.Bug, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(fm.prompts[0], "How this team judged") {
+		t.Error("no feedback yet, no section")
+	}
+	key := st.Findings(tr.Bug)[0].Key
+	st.SetFeedback(key, "wrong", "we log these elsewhere")
+	if err := r.Review(context.Background(), tr.Fix, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	p := fm.prompts[len(fm.prompts)-1]
+	for _, want := range []string{"## How this team judged earlier findings", "Marked wrong here", "we log these elsewhere", "} catch (Exception e) {"} {
+		if !strings.Contains(p, want) {
+			t.Errorf("prompt lacks %q:\n%s", want, p)
+		}
+	}
+	st.SetFeedback(key, "useful", "")
+	r.Review(context.Background(), tr.Init, Options{})
+	if p := fm.prompts[len(fm.prompts)-1]; !strings.Contains(p, "Marked useful here") || strings.Contains(p, "Marked wrong here") {
+		t.Errorf("useful only:\n%s", p)
+	}
+}

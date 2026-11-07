@@ -26,6 +26,7 @@ type Reviewer struct {
 	Model    *model.Client // nil means rules only
 	MaxFiles int
 	Callers  bool // show the model the code in other files that calls the changed methods
+	Learn    bool // show the model findings this team marked wrong or useful, as examples
 	Ignored  func(path string) bool
 }
 
@@ -94,6 +95,10 @@ func (r *Reviewer) Review(ctx context.Context, sha string, opt Options) error {
 	if r.Model != nil && !opt.RulesOnly {
 		commit, _ := r.Repo.Get(sha)
 		var related map[string]string
+		learned := ""
+		if r.Learn {
+			learned = r.feedbackExamples()
+		}
 		if r.Callers {
 			var changed []git.FileChange
 			for _, t := range targets {
@@ -114,7 +119,7 @@ func (r *Reviewer) Review(ctx context.Context, sha string, opt Options) error {
 				break
 			}
 			reviewed++
-			got, dropped, err := r.modelReview(ctx, commit, t.change, t.file, findings, related[t.change.Path], &stats)
+			got, dropped, err := r.modelReview(ctx, commit, t.change, t.file, findings, related[t.change.Path]+learned, &stats)
 			if err != nil {
 				notes = append(notes, "The model could not review "+t.change.Path+": "+err.Error())
 				continue
