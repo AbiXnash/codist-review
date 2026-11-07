@@ -351,3 +351,19 @@ func TestLearnFromFeedback(t *testing.T) {
 		t.Errorf("useful only:\n%s", p)
 	}
 }
+
+func TestUsage(t *testing.T) {
+	tr, r, st := setup(t)
+	if u := Usage(st); u["commits"] != 0 || u["secondsPerCommit"] != nil {
+		t.Errorf("empty %v", u)
+	}
+	fm := &fakeModel{reply: `{"findings":[]}`}
+	r.Model = fm.client(t)
+	r.Review(context.Background(), tr.Bug, Options{})
+	st.SetStats("other", json.RawMessage(`{"calls":2,"replyTokens":10,"decodeSeconds":5,"modelSeconds":8,"promptTokens":100}`))
+	st.SetStats("junk", json.RawMessage(`not json`))
+	u := Usage(st)
+	if u["commits"] != 2 || u["calls"] != 3 || u["tokensPerSecond"] != 2.0 || u["promptVersion"] != PromptVersion || u["promptTokensPerCall"] == nil {
+		t.Errorf("%v", u)
+	}
+}
