@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/AbiXnash/codist-git"
-	"github.com/AbiXnash/codist-java"
 	"github.com/AbiXnash/codist-model"
 	"github.com/AbiXnash/codist-review/store"
 )
@@ -34,6 +33,8 @@ type Reviewer struct {
 	Rules     string // the team's own rules for the model, from .codist/rules.md
 
 	Ignored func(path string) bool
+	// Languages are the languages reviewed; empty means Java only. See Language.
+	Languages []Language
 }
 
 // Options says how much of a review to do.
@@ -71,12 +72,13 @@ func (r *Reviewer) Review(ctx context.Context, sha string, opt Options) error {
 	}
 	type target struct {
 		change git.FileChange
-		file   *java.File
+		file   Parsed
 	}
 	var targets []target
 	var findings []store.Finding
 	for _, c := range changes {
-		if c.Status == "deleted" || !strings.HasSuffix(c.Path, ".java") || (r.Ignored != nil && r.Ignored(c.Path)) {
+		lang := r.langOf(c.Path)
+		if c.Status == "deleted" || lang == nil || (r.Ignored != nil && r.Ignored(c.Path)) {
 			continue
 		}
 		src, ok := r.Repo.FileAt(sha, c.Path)
@@ -84,18 +86,18 @@ func (r *Reviewer) Review(ctx context.Context, sha string, opt Options) error {
 			logger().Warn("changed file not readable", "sha", sha[:7], "path", c.Path)
 			continue
 		}
-		f := java.Parse(c.Path, src)
+		f := lang.Parse(c.Path, src)
 		changed := map[int]bool{}
 		for _, l := range c.Added {
 			changed[l] = true
 		}
-		for _, is := range java.CheckWith(f, changed, r.facts()) {
+		for _, is := range lang.Check(f, changed, r.facts(lang)) {
 			findings = append(findings, finding(sha, c.Path, f, is.Line, is.End, is.Severity, "rule", is.Rule, is.Title, is.Detail, is.Suggestion, ""))
 		}
 		targets = append(targets, target{c, f})
 	}
 	stats := Stats{PromptVersion: PromptVersion, Model: modelName}
-	logger().Debug("checks done", "sha", c.Short, "changed", len(changes), "java", len(targets), "rule_findings", len(findings))
+	logger().Debug("checks done", "sha", c.Short, "changed", len(changes), "reviewed", len(targets), "rule_findings", len(findings))
 	findings = r.hideWrong(findings, &stats)
 	if err := r.Store.ReplaceFindings(sha, findings); err != nil {
 		return fail(err)
@@ -140,7 +142,7 @@ func (r *Reviewer) Review(ctx context.Context, sha string, opt Options) error {
 			if ctx.Err() != nil {
 				return fail(ctx.Err())
 			}
-			if strings.Contains(t.change.Path, "/src/test/") || len(t.change.Added) == 0 {
+			if l := r.langOf(t.change.Path); l != nil && l.IsTest(t.change.Path) || len(t.change.Added) == 0 {
 				continue
 			}
 			if reviewed >= r.MaxFiles {
@@ -184,10 +186,10 @@ func (r *Reviewer) Review(ctx context.Context, sha string, opt Options) error {
 // finding builds a stored finding with the key that identifies the same issue in later commits:
 // the rule or title, the file, and the flagged line with spacing removed, so moving code up or
 // down keeps the same issue.
-func finding(sha, path string, f *java.File, line, end int, severity, source, rule, title, detail, suggestion, doubt string) store.Finding {
+func finding(sha, path string, f Parsed, line, end int, severity, source, rule, title, detail, suggestion, doubt string) store.Finding {
 	snippet := ""
-	if line >= 1 && line <= len(f.Lines) {
-		snippet = strings.TrimSpace(f.Lines[line-1])
+	if lines := f.Lines(); line >= 1 && line <= len(lines) {
+		snippet = strings.TrimSpace(lines[line-1])
 	}
 	what := rule
 	if what == "" {
@@ -270,8 +272,12 @@ func (r *Reviewer) gone(sha, path string, src []byte, present bool, open []store
 	still := map[string]bool{}
 	if present {
 		text = squash(string(src))
-		f := java.Parse(path, src)
-		for _, is := range java.CheckWith(f, nil, r.facts()) {
+		lang := r.langOf(path)
+		if lang == nil {
+			return nil
+		}
+		f := lang.Parse(path, src)
+		for _, is := range lang.Check(f, nil, r.facts(lang)) {
 			still[finding(sha, path, f, is.Line, is.End, is.Severity, "rule", is.Rule, is.Title, "", "", "").Key] = true
 		}
 	}
@@ -301,16 +307,29 @@ const BaselineSHA = "baseline"
 func (r *Reviewer) Baseline(files map[string][]byte) (int, error) {
 	started := time.Now()
 	var findings []store.Finding
-	var parsed []*java.File
+	type file struct {
+		path   string
+		lang   Language
+		parsed Parsed
+	}
+	var all []file
+	byLang := map[Language][]Parsed{}
 	for path, src := range files {
-		if r.Ignored == nil || !r.Ignored(path) {
-			parsed = append(parsed, java.Parse(path, src))
+		if lang := r.langOf(path); lang != nil && (r.Ignored == nil || !r.Ignored(path)) {
+			p := lang.Parse(path, src)
+			all = append(all, file{path, lang, p})
+			if !lang.IsTest(path) {
+				byLang[lang] = append(byLang[lang], p)
+			}
 		}
 	}
-	facts := java.FactsOf(parsed)
-	for _, f := range parsed {
-		path := f.Path
-		for _, is := range java.CheckWith(f, nil, facts) {
+	facts := map[Language]any{}
+	for lang, ps := range byLang {
+		facts[lang] = lang.Facts(ps)
+	}
+	for _, x := range all {
+		path, f := x.path, x.parsed
+		for _, is := range x.lang.Check(f, nil, facts[x.lang]) {
 			fd := finding(BaselineSHA, path, f, is.Line, is.End, is.Severity, "rule", is.Rule, is.Title, is.Detail, is.Suggestion, "")
 			if c, ok := r.Repo.LastChange(path, is.Line); ok {
 				fd.FirstSHA = c.SHA
@@ -377,37 +396,38 @@ func withDeletions(added []int, patch string) []int {
 
 var newStart = regexp.MustCompile(`^@@ -\d+(?:,\d+)? \+(\d+)`)
 
-var factsCache sync.Map // repository root -> cachedFacts
+var factsCache sync.Map // repository root and language -> cachedFacts
 
 type cachedFacts struct {
 	head  string
-	facts *java.Facts
+	facts any
 }
 
-// facts is what the code checks know about the whole project, such as which methods return an Optional. It is read
-// from HEAD once per HEAD: the newest code is the best guess at the project's methods for any commit.
-func (r *Reviewer) facts() *java.Facts {
+// facts is what a language's checks know about the whole project, such as which methods return an Optional. It is
+// read from HEAD once per HEAD: the newest code is the best guess at the project's methods for any commit.
+func (r *Reviewer) facts(lang Language) any {
 	head := r.Repo.Head()
-	if c, ok := factsCache.Load(r.Repo.Root); ok && c.(cachedFacts).head == head {
+	key := r.Repo.Root + "\x00" + lang.Name()
+	if c, ok := factsCache.Load(key); ok && c.(cachedFacts).head == head {
 		return c.(cachedFacts).facts
 	}
 	files, err := r.Repo.Files(head)
 	if err != nil {
-		logger().Warn("project facts not read; checks see one file at a time", "err", err)
+		logger().Warn("project facts not read; checks see one file at a time", "lang", lang.Name(), "err", err)
 		return nil
 	}
 	var paths []string
 	for _, p := range files {
-		if strings.HasSuffix(p, ".java") && !strings.Contains(p, "/src/test/") && (r.Ignored == nil || !r.Ignored(p)) {
+		if lang.Owns(p) && !lang.IsTest(p) && (r.Ignored == nil || !r.Ignored(p)) {
 			paths = append(paths, p)
 		}
 	}
-	var parsed []*java.File
+	var parsed []Parsed
 	for p, src := range r.Repo.ReadAll(head, paths) {
-		parsed = append(parsed, java.Parse(p, src))
+		parsed = append(parsed, lang.Parse(p, src))
 	}
-	facts := java.FactsOf(parsed)
-	factsCache.Store(r.Repo.Root, cachedFacts{head, facts})
-	logger().Debug("project facts", "head", head[:min(7, len(head))], "files", len(parsed), "optional_methods", len(facts.Optional))
+	facts := lang.Facts(parsed)
+	factsCache.Store(key, cachedFacts{head, facts})
+	logger().Debug("project facts", "lang", lang.Name(), "head", head[:min(7, len(head))], "files", len(parsed))
 	return facts
 }

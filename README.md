@@ -30,3 +30,22 @@ err := r.Review(ctx, sha, review.Options{})
 ```bash
 go test -tags 'grammar_subset grammar_subset_java' ./...
 ```
+
+## Adding a language
+
+A review needs five things from a language, written as the `Language` interface in `lang.go`: which files it owns,
+which are tests, how to parse a file into lines and units (classes and their methods), what to learn from the whole
+project once per HEAD (`Facts`), and its checks. Java comes from codist-java (`review.Java`).
+
+To add one, say TypeScript:
+
+1. Make a module such as `codist-ts` that parses and checks TypeScript. tree-sitter has a TypeScript grammar, so
+   the parser Codist already uses can read it.
+2. In it, or in this repository, write a small type with the five methods, the way `javaLang` in `lang.go` wraps
+   codist-java. `lang_test.go` has a made-up language in 20 lines to start from.
+3. List it: `Reviewer{Languages: []review.Language{review.Java, ts.Language}}`.
+
+Everything else works for the new language as it is: findings and issues, following an issue until a commit fixes
+it, the model's review with its claim checks, and Useful/Wrong learning. Still Java only: the callers and contracts
+shown to the model, the code graph, the Repository page and running changed methods before and after a commit. Each
+of those needs its own part of the language later.

@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/AbiXnash/codist-git"
-	"github.com/AbiXnash/codist-java"
 	"github.com/AbiXnash/codist-review/store"
 )
 
@@ -58,11 +57,15 @@ const maxWholeFile = 300
 
 // modelReview asks the model about one file. system is the instructions plus what stays the same for every file (the
 // team's rules and judged examples), so the model server can reuse its work on that opening part between calls.
-func (r *Reviewer) modelReview(ctx context.Context, c git.Commit, ch git.FileChange, f *java.File, known []store.Finding, system, related string, st *Stats) ([]store.Finding, int, error) {
+func (r *Reviewer) modelReview(ctx context.Context, c git.Commit, ch git.FileChange, f Parsed, known []store.Finding, system, related string, st *Stats) ([]store.Finding, int, error) {
 	var out struct {
 		Findings []modelFinding `json:"findings"`
 	}
-	prompt := userPrompt(c, ch, f, known) + related
+	lang := "text"
+	if l := r.langOf(ch.Path); l != nil {
+		lang = l.Name()
+	}
+	prompt := userPrompt(c, ch, f, lang, known) + related
 	key := cacheKey(r.Model.Name, system+"\x00"+prompt)
 	if raw, ok := r.Store.CachedReply(key); ok && json.Unmarshal(raw, &out) == nil {
 		st.Cached++
@@ -80,7 +83,7 @@ func (r *Reviewer) modelReview(ctx context.Context, c git.Commit, ch git.FileCha
 	var got []store.Finding
 	dropped := 0
 	for _, m := range out.Findings {
-		drop, severity, doubt := judge(f.Lines, ch.Patch, m.Line, strings.ToLower(m.Severity), m.Title, m.Evidence)
+		drop, severity, doubt := judge(f.Lines(), ch.Patch, m.Line, strings.ToLower(m.Severity), m.Title, m.Evidence)
 		if drop != "" || repeatsRule(known, ch.Path, m.Line) {
 			logger().Debug("model finding dropped", "sha", c.Short, "path", ch.Path, "line", m.Line, "title", m.Title, "why", cmp.Or(drop, "a code check already reported it"))
 			dropped++
@@ -101,7 +104,7 @@ func repeatsRule(known []store.Finding, path string, line int) bool {
 	return false
 }
 
-func userPrompt(c git.Commit, ch git.FileChange, f *java.File, known []store.Finding) string {
+func userPrompt(c git.Commit, ch git.FileChange, f Parsed, lang string, known []store.Finding) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "## Commit\n%s\n%s\n\n", c.Subject, c.Body)
 	changed := map[int]bool{}
@@ -122,7 +125,8 @@ func userPrompt(c git.Commit, ch git.FileChange, f *java.File, known []store.Fin
 		patch = patch[:6000] + "\n… (diff cut)"
 	}
 	fmt.Fprintf(&b, "## Diff of %s\n```diff\n%s```\n\n", ch.Path, patch)
-	fmt.Fprintf(&b, "## %s after the commit (\">>\" marks changed lines)\n```java\n", ch.Path)
+	fmt.Fprintf(&b, "## %s after the commit (\">>\" marks changed lines)\n```%s\n", ch.Path, lang)
+	lines := f.Lines()
 	for _, r := range shownRanges(f, changed) {
 		if r[0] > 1 {
 			b.WriteString("     …\n")
@@ -132,7 +136,7 @@ func userPrompt(c git.Commit, ch git.FileChange, f *java.File, known []store.Fin
 			if changed[l] {
 				mark = ">>"
 			}
-			fmt.Fprintf(&b, "%s%4d| %s\n", mark, l, f.Lines[l-1])
+			fmt.Fprintf(&b, "%s%4d| %s\n", mark, l, lines[l-1])
 		}
 	}
 	b.WriteString("```\n")
@@ -141,22 +145,19 @@ func userPrompt(c git.Commit, ch git.FileChange, f *java.File, known []store.Fin
 
 // shownRanges picks the lines the model sees: the whole file when it is short; otherwise the
 // class header and fields, and each method that contains a changed line, with a little context.
-func shownRanges(f *java.File, changed map[int]bool) [][2]int {
-	n := len(f.Lines)
+func shownRanges(f Parsed, changed map[int]bool) [][2]int {
+	lines := f.Lines()
+	n := len(lines)
 	if n <= maxWholeFile {
 		return [][2]int{{1, n}}
 	}
 	var rs [][2]int
-	for _, t := range f.Types {
-		header := t.Line
-		for _, fl := range t.Fields {
-			header = max(header, fl.Line)
-		}
-		rs = append(rs, [2]int{max(1, t.Line-3), min(n, header)})
-		for _, m := range t.Methods {
-			for l := m.Line; l <= m.End; l++ {
+	for _, u := range f.Units() {
+		rs = append(rs, [2]int{max(1, u.Start-3), min(n, u.HeaderEnd)})
+		for _, m := range u.Members {
+			for l := m[0]; l <= m[1]; l++ {
 				if changed[l] {
-					rs = append(rs, [2]int{max(1, docStart(f.Lines, m.Line)-1), min(n, m.End+1)}) // with its javadoc
+					rs = append(rs, [2]int{max(1, docStart(lines, m[0])-1), min(n, m[1]+1)}) // with its doc comment
 					break
 				}
 			}

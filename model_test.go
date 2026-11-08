@@ -13,7 +13,6 @@ import (
 
 	"github.com/AbiXnash/codist-git"
 	"github.com/AbiXnash/codist-git/testrepo"
-	"github.com/AbiXnash/codist-java"
 	"github.com/AbiXnash/codist-model"
 	"github.com/AbiXnash/codist-review/store"
 )
@@ -199,9 +198,9 @@ func TestShownRangesOnLongFiles(t *testing.T) {
 		fmt.Fprintf(&b, "  void m%d() {\n    run();\n  }\n", i)
 	}
 	b.WriteString("}\n")
-	f := java.Parse("Big.java", []byte(b.String()))
-	if len(f.Lines) <= maxWholeFile {
-		t.Fatalf("only %d lines", len(f.Lines))
+	f := Java.Parse("Big.java", []byte(b.String()))
+	if len(f.Lines()) <= maxWholeFile {
+		t.Fatalf("only %d lines", len(f.Lines()))
 	}
 	// Line 4 is in m0; line 100 is in m32; line 2 is the field.
 	got := shownRanges(f, map[int]bool{4: true, 100: true, 2: true})
@@ -209,11 +208,11 @@ func TestShownRangesOnLongFiles(t *testing.T) {
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Errorf("got %v, want %v", got, want)
 	}
-	short := java.Parse("S.java", []byte("class S {}\n"))
+	short := Java.Parse("S.java", []byte("class S {}\n"))
 	if fmt.Sprint(shownRanges(short, nil)) != "[[1 2]]" {
 		t.Errorf("a short file is shown whole: %v", shownRanges(short, nil))
 	}
-	p := userPrompt(git.Commit{Subject: "s"}, git.FileChange{Path: "Big.java", Patch: strings.Repeat("x", 7000), Added: []int{100}}, f, nil)
+	p := userPrompt(git.Commit{Subject: "s"}, git.FileChange{Path: "Big.java", Patch: strings.Repeat("x", 7000), Added: []int{100}}, f, "java", nil)
 	if !strings.Contains(p, "… (diff cut)") || !strings.Contains(p, "     …\n") || strings.Contains(p, "Already found") {
 		t.Error("a long diff is cut, gaps are marked, and nothing known is listed")
 	}
