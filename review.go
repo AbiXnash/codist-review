@@ -35,6 +35,9 @@ type Reviewer struct {
 	Ignored func(path string) bool
 	// Languages are the languages reviewed; empty means Java only. See Language.
 	Languages []Language
+	// NoSecondLook turns off the model's second look at each serious finding it made (see secondLook). It is on
+	// unless turned off: on the planted-bug test it turned false alarms on clean commits into notes.
+	NoSecondLook bool
 }
 
 // Options says how much of a review to do.
@@ -161,6 +164,9 @@ func (r *Reviewer) Review(ctx context.Context, sha string, opt Options) error {
 				"took", time.Since(fileStart).Round(time.Millisecond))
 			if dropped > 0 {
 				logger().Info("dropped model findings", "sha", c.Short, "path", t.change.Path, "count", dropped)
+			}
+			if !r.NoSecondLook {
+				got = r.secondLook(ctx, commit, t.change, t.file.Lines(), got, &stats)
 			}
 			for i := range got {
 				got[i] = triage.demote(got[i])

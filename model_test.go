@@ -23,6 +23,7 @@ type fakeModel struct {
 	mu      sync.Mutex
 	status  int
 	reply   string
+	judge   string // the reply to a second look, when set
 	prompts []string
 }
 
@@ -40,7 +41,11 @@ func (f *fakeModel) client(t *testing.T) *model.Client {
 			io.WriteString(w, "busy")
 			return
 		}
-		b, _ := json.Marshal(map[string]any{"message": map[string]string{"content": f.reply}})
+		reply := f.reply
+		if f.judge != "" && strings.HasPrefix(req.Messages[0].Content, "You check one claim") {
+			reply = f.judge
+		}
+		b, _ := json.Marshal(map[string]any{"message": map[string]string{"content": reply}})
 		w.Write(b)
 	}))
 	t.Cleanup(s.Close)
@@ -70,7 +75,7 @@ func TestModelReview(t *testing.T) {
 		{"line":999,"severity":"high","title":"Ghost","evidence":"x","detail":"d"},
 		{"line":23,"severity":"weird","title":"Charge in a loop","evidence":"payments.charge(o.getId());","detail":"d","suggestion":"batch it"}
 	]}`}
-	r.Model = fm.client(t)
+	r.Model, r.NoSecondLook = fm.client(t), true // this test is about the first look; TestSecondLook covers the second
 	if err := r.Review(context.Background(), tr.Bug, Options{}); err != nil {
 		t.Fatal(err)
 	}
@@ -364,5 +369,75 @@ func TestUsage(t *testing.T) {
 	u := Usage(st)
 	if u["commits"] != 2 || u["calls"] != 3 || u["tokensPerSecond"] != 2.0 || u["promptVersion"] != PromptVersion || u["promptTokensPerCall"] == nil {
 		t.Errorf("%v", u)
+	}
+}
+
+// A serious finding the second look disproves stays visible as a note with the reason; one it confirms is kept. The
+// judge sees the code, the change and the definition of a project type the claim names.
+func TestSecondLook(t *testing.T) {
+	for _, c := range []struct {
+		verdict, severity string
+		doubted           bool
+	}{{"refuted", "low", true}, {"confirmed", "medium", false}, {"unsure", "medium", false}} {
+		tr, r, st := setup(t)
+		fm := &fakeModel{
+			reply: `{"findings":[{"line":23,"severity":"medium","title":"Charge in a loop","evidence":"payments.charge(o.getId());","detail":"Order may be charged twice"}]}`,
+			judge: `{"against":"payments.charge(o.getId());","for":"payments.charge(o.getId());","verdict":"` + c.verdict + `","reason":"payments.charge(o.getId()) runs once per order"}`,
+		}
+		r.Model = fm.client(t)
+		if err := r.Review(context.Background(), tr.Bug, Options{}); err != nil {
+			t.Fatal(err)
+		}
+		var f store.Finding
+		for _, x := range st.Findings(tr.Bug) {
+			if x.Source == "model" {
+				f = x
+			}
+		}
+		if f.Severity != c.severity || (f.Doubt != "") != c.doubted {
+			t.Errorf("%s: %+v", c.verdict, f)
+		}
+		if c.verdict == "refuted" && !strings.Contains(f.Doubt, "runs once per order") {
+			t.Errorf("the note says why: %q", f.Doubt)
+		}
+		var judged string
+		for _, p := range fm.prompts {
+			if strings.HasPrefix(p, "You check one claim") {
+				judged = p
+			}
+		}
+		for _, want := range []string{"## The claim", "Charge in a loop", "## Commit\nAdd discount", "```diff", "## Definition of Order"} {
+			if !strings.Contains(judged, want) {
+				t.Errorf("%s: judge prompt lacks %q:\n%s", c.verdict, want, judged)
+			}
+		}
+	}
+	// Turned off, no second look is asked for.
+	tr, r, _ := setup(t)
+	fm := &fakeModel{reply: `{"findings":[{"line":23,"severity":"high","title":"Charge in a loop","evidence":"payments.charge(o.getId());","detail":"d"}]}`, judge: `{"verdict":"refuted","reason":"r"}`}
+	r.Model, r.NoSecondLook = fm.client(t), true
+	r.Review(context.Background(), tr.Bug, Options{})
+	for _, p := range fm.prompts {
+		if strings.HasPrefix(p, "You check one claim") {
+			t.Error("second look asked for while turned off")
+		}
+	}
+}
+
+func TestVerdictOf(t *testing.T) {
+	shown := "    public record PublicEmployee(long id,\n            String salary) {\n        payments.charge(o.getId());\n        if (!HR.equals(role)) {\n"
+	for _, c := range []struct{ verdict, proof, against, reason, want string }{
+		{"confirmed", "payments.charge(o.getId());", "", "Each order is charged inside the loop.", "confirmed"},
+		{"confirmed", "public record PublicEmployee(long id,\n String salary)", "", "A quote over two lines counts.", "confirmed"},
+		{"confirmed", "", "", "It is charged twice.", "unproven"},                                             // no proof
+		{"confirmed", "The endpoint does not enforce rule 1", "", "Prose is not code.", "unproven"},           // not code
+		{"confirmed", "payments.charge(o.getId());", "", "The view might contain personal data.", "unproven"}, // a guess
+		{"refuted", "", "if (!HR.equals(role)) {", "equals on a constant is safe with null.", "refuted"},
+		{"refuted", "", "", "Both versions behave the same.", "unsure"}, // a refutation that quotes nothing changes nothing
+		{"unsure", "payments.charge(o.getId());", "", "Not settled.", "unsure"},
+	} {
+		if got := verdictOf(c.verdict, c.proof, c.against, c.reason, shown); got != c.want {
+			t.Errorf("%s / %q: got %s, want %s", c.verdict, c.reason, got, c.want)
+		}
 	}
 }

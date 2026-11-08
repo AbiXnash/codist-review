@@ -108,6 +108,11 @@ func judge(lines []string, patch string, line int, severity, title, evidence str
 // nearby code tests the value for null, sets it to null, or takes it from a call that returns null
 // on a miss.
 func nullBacked(evidence string, lines []string, line int, patch string) bool {
+	// A null error needs a value used with a dot while null. In !HR.equals(role) or Objects.equals(a, b) nothing
+	// that can be null is used that way, so the claim has nothing to stand on, whatever the change removed.
+	if !dereferences(evidence) {
+		return false
+	}
 	if removedNull.MatchString(patch) {
 		return true
 	}
@@ -122,6 +127,19 @@ func nullBacked(evidence string, lines []string, line int, patch string) bool {
 				return true
 			}
 		}
+	}
+	return false
+}
+
+// dereferences says the quoted code uses a value that could be null with a dot or an index: a variable, not a
+// constant (HR), a type (Objects, String) or this.
+func dereferences(code string) bool {
+	for _, m := range receiver.FindAllStringSubmatch(code, -1) {
+		name := m[1]
+		if name == "this" || name == "super" || name[0] >= 'A' && name[0] <= 'Z' {
+			continue // a constant or a type: static calls and constants are never null
+		}
+		return true
 	}
 	return false
 }

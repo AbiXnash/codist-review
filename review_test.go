@@ -34,6 +34,9 @@ func TestJudge(t *testing.T) {
     Order o = repo.findById(id).orElseThrow();
     return o.total();
   }
+  void g(String role) {
+    if (!HR.equals(role)) { deny(); }
+  }
 }`, "\n")
 	cases := []struct {
 		name, severity, title, evidence, patch string
@@ -56,6 +59,7 @@ func TestJudge(t *testing.T) {
 		{"orElseThrow never gives null", "high", "NullPointerException risk", "return o.total();", "", 20, false, "low", true},
 		{"only says the message disagrees", "high", "Commit message contradicts code change", "return c.name();", "", 7, false, "low", true},
 		{"line outside the file", "high", "Wrong total", "return c.name();", "", 99, true, "", false},
+		{"null-safe equals, though a null check was removed", "high", "Null Pointer Exception", "if (!HR.equals(role)) { deny(); }", "-  if (role != null && role != HR) {\n", 23, false, "low", true},
 	}
 	for _, c := range cases {
 		drop, sev, doubt := judge(code, c.patch, c.line, c.severity, c.title, c.evidence)
