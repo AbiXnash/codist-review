@@ -49,3 +49,13 @@ Everything else works for the new language as it is: findings and issues, follow
 it, the model's review with its claim checks, and Useful/Wrong learning. Still Java only: the callers and contracts
 shown to the model, the code graph, the Repository page and running changed methods before and after a commit. Each
 of those needs its own part of the language later.
+
+## Licence
+
+Source available under the [PolyForm Noncommercial License 1.0.0](LICENSE): free for any noncommercial purpose, such
+as personal study, research, hobby projects and testing, and for use by charities, schools, public research and
+public health bodies and government institutions. **Using it for a business, or in anything sold, needs a commercial
+licence** from the author: open an issue at [github.com/AbiXnash/codist](https://github.com/AbiXnash/codist/issues)
+to ask. Third-party code included in Codist keeps its own licence.
+
+Required Notice: Copyright 2026 Abinash (https://github.com/AbiXnash)
