@@ -3,9 +3,9 @@ module github.com/AbiXnash/codist-review
 go 1.26.0
 
 require (
-	github.com/AbiXnash/codist-git v0.3.0
-	github.com/AbiXnash/codist-java v0.1.0
-	github.com/AbiXnash/codist-model v0.3.0
+	github.com/AbiXnash/codist-git v0.4.0
+	github.com/AbiXnash/codist-java v0.4.0
+	github.com/AbiXnash/codist-model v0.3.1
 	modernc.org/sqlite v1.61.1
 )
 
