@@ -9,6 +9,7 @@
 package risk
 
 import (
+	"log/slog"
 	"math"
 	"path"
 	"regexp"
@@ -88,7 +89,10 @@ func Train(repo *git.Repo, opt Options) *Model {
 	for sha := range opt.Known {
 		labels[sha] = true
 	}
-	code, _ := repo.CodeChurn(opt.Commits) // nil if it fails: then all changed lines count
+	code, err := repo.CodeChurn(opt.Commits) // nil if it fails: then all changed lines count
+	if err != nil {
+		slog.Warn("code churn not read; counting all changed lines", "lib", "risk", "err", err)
+	}
 	feats := Features(hist, code)
 	var x [][]float64
 	var y []float64
@@ -153,6 +157,7 @@ func Labels(repo *git.Repo, hist []git.CommitStat, blames int) map[string]bool {
 		}
 		changes, err := repo.Changes(c.SHA)
 		if err != nil {
+			slog.Debug("fix commit not read", "lib", "risk", "sha", c.SHA, "err", err)
 			continue
 		}
 		for _, ch := range changes {

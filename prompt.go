@@ -1,6 +1,7 @@
 package review
 
 import (
+	"cmp"
 	"context"
 	_ "embed"
 	"encoding/json"
@@ -65,6 +66,7 @@ func (r *Reviewer) modelReview(ctx context.Context, c git.Commit, ch git.FileCha
 	key := cacheKey(r.Model.Name, system+"\x00"+prompt)
 	if raw, ok := r.Store.CachedReply(key); ok && json.Unmarshal(raw, &out) == nil {
 		st.Cached++
+		logger().Debug("model reply from cache", "sha", c.Short, "path", ch.Path)
 	} else {
 		u, err := r.Model.ChatJSON(ctx, system, prompt, schema, &out)
 		if err != nil {
@@ -72,7 +74,7 @@ func (r *Reviewer) modelReview(ctx context.Context, c git.Commit, ch git.FileCha
 		}
 		st.add(u)
 		if raw, err := json.Marshal(out); err == nil {
-			_ = r.Store.SetCachedReply(key, raw)
+			warnIf(r.Store.SetCachedReply(key, raw), "model reply not cached", "sha", c.Short, "path", ch.Path)
 		}
 	}
 	var got []store.Finding
@@ -80,6 +82,7 @@ func (r *Reviewer) modelReview(ctx context.Context, c git.Commit, ch git.FileCha
 	for _, m := range out.Findings {
 		drop, severity, doubt := judge(f.Lines, ch.Patch, m.Line, strings.ToLower(m.Severity), m.Title, m.Evidence)
 		if drop != "" || repeatsRule(known, ch.Path, m.Line) {
+			logger().Debug("model finding dropped", "sha", c.Short, "path", ch.Path, "line", m.Line, "title", m.Title, "why", cmp.Or(drop, "a code check already reported it"))
 			dropped++
 			continue
 		}

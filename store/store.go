@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"time"
@@ -122,7 +123,9 @@ func OpenRepo(dir, root string) (*Store, error) {
 	if _, err := os.Stat(filepath.Join(dir, name+".db")); os.IsNotExist(err) {
 		if _, err := os.Stat(old + ".db"); err == nil {
 			for _, ext := range []string{".db", ".db-wal", ".db-shm"} {
-				_ = os.Rename(old+ext, filepath.Join(dir, name+ext))
+				if err := os.Rename(old+ext, filepath.Join(dir, name+ext)); err != nil && !os.IsNotExist(err) {
+					slog.Warn("older database not moved", "lib", "store", "from", old+ext, "err", err)
+				}
 			}
 		}
 	}
@@ -241,6 +244,7 @@ func (s *Store) Findings(sha string) []Finding {
 		FROM findings f LEFT JOIN issues i ON i.key = f.key WHERE f.sha=?
 		ORDER BY CASE f.severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END, f.path, f.line`, sha)
 	if err != nil {
+		readFailed("Findings", err)
 		return nil
 	}
 	defer rows.Close()
@@ -377,6 +381,7 @@ func (s *Store) Incident(id int64) (Incident, error) {
 func (s *Store) Incidents() []Incident {
 	rows, err := s.db.Query(`SELECT id, created, title FROM incidents ORDER BY id DESC`)
 	if err != nil {
+		readFailed("Incidents", err)
 		return nil
 	}
 	defer rows.Close()
@@ -405,6 +410,7 @@ func (s *Store) OpenIssueList() []Issue {
 		WHERE i.state = 'open'
 		ORDER BY CASE f.severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END, i.path, f.line`)
 	if err != nil {
+		readFailed("OpenIssueList", err)
 		return nil
 	}
 	defer rows.Close()
@@ -432,6 +438,7 @@ func (s *Store) AllIssues() []TrackedIssue {
 		FROM issues i JOIN findings f ON f.id = (SELECT MAX(id) FROM findings WHERE key = i.key)
 		ORDER BY CASE f.severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END, i.path, f.line`)
 	if err != nil {
+		readFailed("AllIssues", err)
 		return nil
 	}
 	var out []TrackedIssue
@@ -506,6 +513,7 @@ func (s *Store) SetBehaviour(sha string, report json.RawMessage) error {
 func (s *Store) Behaviour(sha string) (json.RawMessage, bool) {
 	var report string
 	if err := s.db.QueryRow(`SELECT report FROM behaviour WHERE sha=?`, sha).Scan(&report); err != nil {
+		readFailed("Behaviour", err)
 		return nil, false
 	}
 	return json.RawMessage(report), true
@@ -532,6 +540,7 @@ func (s *Store) BehaviourDone() map[string]bool {
 func (s *Store) CachedReply(key string) (json.RawMessage, bool) {
 	var reply string
 	if err := s.db.QueryRow(`SELECT reply FROM model_cache WHERE key=?`, key).Scan(&reply); err != nil {
+		readFailed("CachedReply", err)
 		return nil, false
 	}
 	return json.RawMessage(reply), true
@@ -554,6 +563,7 @@ func (s *Store) SetStats(sha string, stats json.RawMessage) error {
 func (s *Store) Stats(sha string) (json.RawMessage, bool) {
 	var stats string
 	if err := s.db.QueryRow(`SELECT stats FROM review_stats WHERE sha=?`, sha).Scan(&stats); err != nil {
+		readFailed("Stats", err)
 		return nil, false
 	}
 	return json.RawMessage(stats), true
@@ -611,4 +621,11 @@ func (s *Store) AllFeedback() map[string]Feedback {
 		}
 	}
 	return out
+}
+
+// readFailed logs a read the caller treats as "nothing there". A missing row is normal and not logged.
+func readFailed(what string, err error) {
+	if !errors.Is(err, sql.ErrNoRows) {
+		slog.Warn("database read failed", "lib", "store", "read", what, "err", err)
+	}
 }

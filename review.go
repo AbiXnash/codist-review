@@ -8,7 +8,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"regexp"
 	"slices"
 	"strconv"
@@ -55,9 +54,11 @@ func (r *Reviewer) Review(ctx context.Context, sha string, opt Options) error {
 	if r.Model != nil && !opt.RulesOnly {
 		modelName = r.Model.Name
 	}
-	_ = r.Store.SetReview(store.Review{SHA: sha, Status: "running", Model: modelName, Started: started})
+	warnIf(r.Store.SetReview(store.Review{SHA: sha, Status: "running", Model: modelName, Started: started}), "review status not saved", "sha", c.Short)
 	fail := func(err error) error {
-		_ = r.Store.SetReview(store.Review{SHA: sha, Status: "failed", Model: modelName, Note: err.Error(), Started: started, Finished: time.Now()})
+		logger().Warn("review failed", "sha", c.Short, "took", time.Since(started).Round(time.Millisecond), "err", err)
+		warnIf(r.Store.SetReview(store.Review{SHA: sha, Status: "failed", Model: modelName, Note: err.Error(), Started: started, Finished: time.Now()}),
+			"review status not saved", "sha", c.Short)
 		return err
 	}
 	changes, err := r.Repo.Changes(sha)
@@ -79,6 +80,7 @@ func (r *Reviewer) Review(ctx context.Context, sha string, opt Options) error {
 		}
 		src, ok := r.Repo.FileAt(sha, c.Path)
 		if !ok {
+			logger().Warn("changed file not readable", "sha", sha[:7], "path", c.Path)
 			continue
 		}
 		f := java.Parse(c.Path, src)
@@ -92,6 +94,7 @@ func (r *Reviewer) Review(ctx context.Context, sha string, opt Options) error {
 		targets = append(targets, target{c, f})
 	}
 	stats := Stats{PromptVersion: PromptVersion, Model: modelName}
+	logger().Debug("checks done", "sha", c.Short, "changed", len(changes), "java", len(targets), "rule_findings", len(findings))
 	findings = r.hideWrong(findings, &stats)
 	if err := r.Store.ReplaceFindings(sha, findings); err != nil {
 		return fail(err)
@@ -102,7 +105,7 @@ func (r *Reviewer) Review(ctx context.Context, sha string, opt Options) error {
 		notes = append(notes, opt.Why)
 	}
 	if r.Model != nil && !opt.RulesOnly {
-		commit, _ := r.Repo.Get(sha)
+		commit := c
 		var related map[string]string
 		learned := ""
 		if r.Learn {
@@ -144,19 +147,23 @@ func (r *Reviewer) Review(ctx context.Context, sha string, opt Options) error {
 				break
 			}
 			reviewed++
+			fileStart := time.Now()
 			got, dropped, err := r.modelReview(ctx, commit, t.change, t.file, findings, system, related[t.change.Path], &stats)
 			if err != nil {
+				logger().Warn("model could not review file", "sha", c.Short, "path", t.change.Path, "err", err)
 				notes = append(notes, "The model could not review "+t.change.Path+": "+err.Error())
 				continue
 			}
+			logger().Debug("model reviewed file", "sha", c.Short, "path", t.change.Path, "kept", len(got), "dropped", dropped,
+				"took", time.Since(fileStart).Round(time.Millisecond))
 			if dropped > 0 {
-				slog.Info("dropped model findings", "sha", sha[:7], "path", t.change.Path, "count", dropped)
+				logger().Info("dropped model findings", "sha", c.Short, "path", t.change.Path, "count", dropped)
 			}
 			for i := range got {
 				got[i] = triage.demote(got[i])
 			}
 			findings = append(findings, r.hideWrong(got, &stats)...)
-			_ = r.Store.ReplaceFindings(sha, findings) // show progress file by file
+			warnIf(r.Store.ReplaceFindings(sha, findings), "progress not saved", "sha", c.Short) // show progress file by file
 		}
 	}
 	r.resolve(sha, changes)
@@ -165,9 +172,10 @@ func (r *Reviewer) Review(ctx context.Context, sha string, opt Options) error {
 	}
 	if modelName != "" {
 		if raw, err := json.Marshal(stats); err == nil {
-			_ = r.Store.SetStats(sha, raw)
+			warnIf(r.Store.SetStats(sha, raw), "model usage not saved", "sha", c.Short)
 		}
 	}
+	logger().Debug("review done", "sha", c.Short, "findings", len(findings), "hidden", stats.Hidden, "took", time.Since(started).Round(time.Millisecond))
 	return r.Store.SetReview(store.Review{SHA: sha, Status: "done", Model: modelName, Note: strings.Join(notes, " "), Started: started, Finished: time.Now()})
 }
 
@@ -206,6 +214,7 @@ func (r *Reviewer) resolve(sha string, changes []git.FileChange) {
 		if c.Status != "deleted" {
 			src, ok := r.Repo.FileAt(sha, c.Path)
 			if !ok {
+				logger().Warn("file not readable, its issues stay open", "sha", sha[:min(7, len(sha))], "path", c.Path)
 				continue
 			}
 			text = squash(string(src))
@@ -222,7 +231,8 @@ func (r *Reviewer) resolve(sha string, changes []git.FileChange) {
 			}
 		}
 		if len(fixed) > 0 {
-			_ = r.Store.Resolve(fixed, sha)
+			logger().Debug("issues fixed", "sha", sha[:min(7, len(sha))], "path", c.Path, "count", len(fixed))
+			warnIf(r.Store.Resolve(fixed, sha), "fixed issues not saved", "sha", sha[:min(7, len(sha))], "path", c.Path)
 		}
 	}
 }
@@ -248,6 +258,7 @@ func (r *Reviewer) Baseline(files map[string][]byte) (int, error) {
 			findings = append(findings, fd)
 		}
 	}
+	logger().Debug("baseline checked", "files", len(files), "findings", len(findings), "took", time.Since(started).Round(time.Millisecond))
 	if err := r.Store.SetReview(store.Review{SHA: BaselineSHA, Status: "running", Started: started}); err != nil {
 		return 0, err
 	}
