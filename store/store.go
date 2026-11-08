@@ -284,19 +284,20 @@ func (s *Store) Counts() map[string]map[string]int {
 // OpenIssue is an issue that is still open.
 type OpenIssue struct {
 	Key, Rule, Snippet string
+	FirstSHA           string // the commit that brought it, or the commit that last changed its line for a first-run issue
 }
 
 // OpenIssues lists the open issues in one file.
 func (s *Store) OpenIssues(path string) []OpenIssue {
 	var out []OpenIssue
-	rows, err := s.db.Query(`SELECT key, rule, snippet FROM issues WHERE path=? AND state='open'`, path)
+	rows, err := s.db.Query(`SELECT key, rule, snippet, COALESCE(first_sha, '') FROM issues WHERE path=? AND state='open'`, path)
 	if err != nil {
 		return out
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var o OpenIssue
-		if rows.Scan(&o.Key, &o.Rule, &o.Snippet) == nil {
+		if rows.Scan(&o.Key, &o.Rule, &o.Snippet, &o.FirstSHA) == nil {
 			out = append(out, o)
 		}
 	}

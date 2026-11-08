@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/AbiXnash/codist-git"
@@ -88,7 +89,7 @@ func (r *Reviewer) Review(ctx context.Context, sha string, opt Options) error {
 		for _, l := range c.Added {
 			changed[l] = true
 		}
-		for _, is := range java.Check(f, changed) {
+		for _, is := range java.CheckWith(f, changed, r.facts()) {
 			findings = append(findings, finding(sha, c.Path, f, is.Line, is.End, is.Severity, "rule", is.Rule, is.Title, is.Detail, is.Suggestion, ""))
 		}
 		targets = append(targets, target{c, f})
@@ -167,6 +168,7 @@ func (r *Reviewer) Review(ctx context.Context, sha string, opt Options) error {
 		}
 	}
 	r.resolve(sha, changes)
+	r.settle(sha, findings)
 	if stats.Hidden > 0 {
 		notes = append(notes, fmt.Sprintf("%d finding%s not shown because %s marked wrong before.", stats.Hidden, plural(stats.Hidden), map[bool]string{true: "it was", false: "they were"}[stats.Hidden == 1]))
 	}
@@ -200,41 +202,95 @@ var space = regexp.MustCompile(`\s+`)
 
 func squash(s string) string { return space.ReplaceAllString(s, "") }
 
-// resolve closes open issues in the files a commit changed. A code check issue is fixed when the
-// check, run on the whole new file, no longer reports it. A model issue is fixed when the line it
-// flagged is gone, since the model cannot be asked again for every commit.
+// resolve closes open issues in the files a commit changed.
 func (r *Reviewer) resolve(sha string, changes []git.FileChange) {
 	for _, c := range changes {
 		open := r.Store.OpenIssues(c.Path)
 		if len(open) == 0 {
 			continue
 		}
-		var text string
-		still := map[string]bool{}
+		var src []byte
 		if c.Status != "deleted" {
-			src, ok := r.Repo.FileAt(sha, c.Path)
-			if !ok {
+			var ok bool
+			if src, ok = r.Repo.FileAt(sha, c.Path); !ok {
 				logger().Warn("file not readable, its issues stay open", "sha", sha[:min(7, len(sha))], "path", c.Path)
 				continue
 			}
-			text = squash(string(src))
-			f := java.Parse(c.Path, src)
-			for _, is := range java.Check(f, nil) {
-				still[finding(sha, c.Path, f, is.Line, is.End, is.Severity, "rule", is.Rule, is.Title, "", "", "").Key] = true
-			}
 		}
+		// Only issues brought before this commit can be fixed by it. Catching up newest first, an older commit is
+		// reviewed after newer ones, and the issues they brought are not in its code yet: that is not a fix.
 		var fixed []string
-		for _, o := range open {
-			gone := o.Rule != "" && !still[o.Key] || o.Rule == "" && squash(o.Snippet) != "" && !strings.Contains(text, squash(o.Snippet))
-			if gone {
-				fixed = append(fixed, o.Key)
+		for _, k := range r.gone(sha, c.Path, src, c.Status != "deleted", open) {
+			if i := slices.IndexFunc(open, func(o store.OpenIssue) bool { return o.Key == k }); open[i].FirstSHA == BaselineSHA || r.Repo.IsAncestor(open[i].FirstSHA, sha) {
+				fixed = append(fixed, k)
 			}
 		}
-		if len(fixed) > 0 {
-			logger().Debug("issues fixed", "sha", sha[:min(7, len(sha))], "path", c.Path, "count", len(fixed))
-			warnIf(r.Store.Resolve(fixed, sha), "fixed issues not saved", "sha", sha[:min(7, len(sha))], "path", c.Path)
+		r.close(sha, c.Path, fixed)
+	}
+}
+
+// settle closes the issues this commit opened that a later commit has already fixed. Codist reads its backlog newest
+// first, so the commit that fixed an issue may have been reviewed before the one that brought it, when there was
+// nothing yet to close. Only this commit's issues are settled: one opened later may simply not exist yet at an
+// earlier commit.
+func (r *Reviewer) settle(sha string, findings []store.Finding) {
+	mine := map[string]map[string]bool{} // path -> keys of the issues this commit opened there
+	for _, f := range findings {
+		if f.SHA == sha && f.Key != "" {
+			if mine[f.Path] == nil {
+				mine[f.Path] = map[string]bool{}
+			}
+			mine[f.Path][f.Key] = true
 		}
 	}
+	for path, keys := range mine {
+		var open []store.OpenIssue
+		for _, o := range r.Store.OpenIssues(path) {
+			if keys[o.Key] {
+				open = append(open, o)
+			}
+		}
+		for _, later := range r.Repo.Later(sha, path) {
+			if len(open) == 0 {
+				break
+			}
+			src, present := r.Repo.FileAt(later, path) // gone when that commit deleted or moved the file
+			fixed := r.gone(later, path, src, present, open)
+			r.close(later, path, fixed)
+			open = slices.DeleteFunc(open, func(o store.OpenIssue) bool { return slices.Contains(fixed, o.Key) })
+		}
+	}
+}
+
+// gone lists which open issues of a file are no longer there in src, the file at sha (present false when it is not
+// there at all). A check issue is gone when the check, run on the whole file, no longer reports it. A model issue is
+// gone when the line it flagged is gone, since the model cannot be asked again for every commit.
+func (r *Reviewer) gone(sha, path string, src []byte, present bool, open []store.OpenIssue) []string {
+	var text string
+	still := map[string]bool{}
+	if present {
+		text = squash(string(src))
+		f := java.Parse(path, src)
+		for _, is := range java.CheckWith(f, nil, r.facts()) {
+			still[finding(sha, path, f, is.Line, is.End, is.Severity, "rule", is.Rule, is.Title, "", "", "").Key] = true
+		}
+	}
+	var fixed []string
+	for _, o := range open {
+		if o.Rule != "" && !still[o.Key] || o.Rule == "" && squash(o.Snippet) != "" && !strings.Contains(text, squash(o.Snippet)) {
+			fixed = append(fixed, o.Key)
+		}
+	}
+	return fixed
+}
+
+// close marks issues fixed by the commit sha.
+func (r *Reviewer) close(sha, path string, fixed []string) {
+	if len(fixed) == 0 {
+		return
+	}
+	logger().Debug("issues fixed", "sha", sha[:min(7, len(sha))], "path", path, "count", len(fixed))
+	warnIf(r.Store.Resolve(fixed, sha), "fixed issues not saved", "sha", sha[:min(7, len(sha))], "path", path)
 }
 
 // BaselineSHA names the first-run scan of the whole code, which is stored like a review.
@@ -245,12 +301,16 @@ const BaselineSHA = "baseline"
 func (r *Reviewer) Baseline(files map[string][]byte) (int, error) {
 	started := time.Now()
 	var findings []store.Finding
+	var parsed []*java.File
 	for path, src := range files {
-		if r.Ignored != nil && r.Ignored(path) {
-			continue
+		if r.Ignored == nil || !r.Ignored(path) {
+			parsed = append(parsed, java.Parse(path, src))
 		}
-		f := java.Parse(path, src)
-		for _, is := range java.Check(f, nil) {
+	}
+	facts := java.FactsOf(parsed)
+	for _, f := range parsed {
+		path := f.Path
+		for _, is := range java.CheckWith(f, nil, facts) {
 			fd := finding(BaselineSHA, path, f, is.Line, is.End, is.Severity, "rule", is.Rule, is.Title, is.Detail, is.Suggestion, "")
 			if c, ok := r.Repo.LastChange(path, is.Line); ok {
 				fd.FirstSHA = c.SHA
@@ -316,3 +376,38 @@ func withDeletions(added []int, patch string) []int {
 }
 
 var newStart = regexp.MustCompile(`^@@ -\d+(?:,\d+)? \+(\d+)`)
+
+var factsCache sync.Map // repository root -> cachedFacts
+
+type cachedFacts struct {
+	head  string
+	facts *java.Facts
+}
+
+// facts is what the code checks know about the whole project, such as which methods return an Optional. It is read
+// from HEAD once per HEAD: the newest code is the best guess at the project's methods for any commit.
+func (r *Reviewer) facts() *java.Facts {
+	head := r.Repo.Head()
+	if c, ok := factsCache.Load(r.Repo.Root); ok && c.(cachedFacts).head == head {
+		return c.(cachedFacts).facts
+	}
+	files, err := r.Repo.Files(head)
+	if err != nil {
+		logger().Warn("project facts not read; checks see one file at a time", "err", err)
+		return nil
+	}
+	var paths []string
+	for _, p := range files {
+		if strings.HasSuffix(p, ".java") && !strings.Contains(p, "/src/test/") && (r.Ignored == nil || !r.Ignored(p)) {
+			paths = append(paths, p)
+		}
+	}
+	var parsed []*java.File
+	for p, src := range r.Repo.ReadAll(head, paths) {
+		parsed = append(parsed, java.Parse(p, src))
+	}
+	facts := java.FactsOf(parsed)
+	factsCache.Store(r.Repo.Root, cachedFacts{head, facts})
+	logger().Debug("project facts", "head", head[:min(7, len(head))], "files", len(parsed), "optional_methods", len(facts.Optional))
+	return facts
+}

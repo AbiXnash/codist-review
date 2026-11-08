@@ -84,9 +84,6 @@ func TestReviewAndResolve(t *testing.T) {
 	write("class A {\n  void a() {\n    try {\n      run();\n    } catch (Exception e) {\n    }\n  }\n}\n")
 	run("commit", "-q", "-am", "Guard run")
 	bad := head(t, dir)
-	write("class A {\n  void a() {\n    try {\n      run();\n    } catch (Exception e) {\n      throw new IllegalStateException(e);\n    }\n  }\n}\n")
-	run("commit", "-q", "-am", "Rethrow")
-	fix := head(t, dir)
 
 	repo, _ := git.Open(dir)
 	st, err := store.Open(t.TempDir(), "r")
@@ -105,11 +102,61 @@ func TestReviewAndResolve(t *testing.T) {
 	if rv, _ := st.GetReview(bad); rv.Status != "done" {
 		t.Errorf("status %q", rv.Status)
 	}
+	write("class A {\n  void a() {\n    try {\n      run();\n    } catch (Exception e) {\n      throw new IllegalStateException(e);\n    }\n  }\n}\n")
+	run("commit", "-q", "-am", "Rethrow")
+	fix := head(t, dir)
 	if err := r.Review(context.Background(), fix, Options{}); err != nil {
 		t.Fatal(err)
 	}
 	if got := st.Findings(bad); got[0].State != "resolved" || len(st.Findings(fix)) != 0 {
 		t.Errorf("after the fix: %+v, fix findings %+v", got, st.Findings(fix))
+	}
+}
+
+// Catching up on history, Codist reads the newest commits first, so the fix is reviewed before the bug it fixes. The
+// bug's issue must still close, credited to the fix, while an issue no later commit fixed stays open.
+func TestNewestFirstStillResolves(t *testing.T) {
+	dir := t.TempDir()
+	run := func(args ...string) {
+		cmd := exec.Command("git", append([]string{"-C", dir, "-c", "user.name=T", "-c", "user.email=t@t"}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %s", args, out)
+		}
+	}
+	a := filepath.Join(dir, "svc", "src", "main", "java", "A.java")
+	b := filepath.Join(dir, "svc", "src", "main", "java", "B.java")
+	os.MkdirAll(filepath.Dir(a), 0o755)
+	run("init", "-q")
+	os.WriteFile(a, []byte("class A {\n  void a() {\n    run();\n  }\n}\n"), 0o644)
+	run("add", ".")
+	run("commit", "-q", "-m", "Add A")
+	os.WriteFile(a, []byte("class A {\n  void a() {\n    try {\n      run();\n    } catch (Exception e) {\n    }\n  }\n}\n"), 0o644)
+	os.WriteFile(b, []byte("class B {\n  void b() {\n    try {\n      run();\n    } catch (Exception e) {\n    }\n  }\n}\n"), 0o644)
+	run("add", ".")
+	run("commit", "-q", "-m", "Guard run")
+	bad := head(t, dir)
+	os.WriteFile(a, []byte("class A {\n  void a() {\n    run();\n  }\n}\n"), 0o644)
+	run("commit", "-q", "-am", "Let errors through in A")
+	fix := head(t, dir)
+
+	repo, _ := git.Open(dir)
+	st, err := store.Open(t.TempDir(), "r")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	r := &Reviewer{Repo: repo, Store: st, MaxFiles: 8}
+	for _, sha := range []string{fix, bad} { // newest first, as the backlog runs
+		if err := r.Review(context.Background(), sha, Options{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	state := map[string]string{}
+	for _, f := range st.Findings(bad) {
+		state[filepath.Base(f.Path)] = f.State
+	}
+	if state["A.java"] != "resolved" || state["B.java"] != "open" {
+		t.Errorf("want A's issue resolved by the later fix and B's still open, got %v", state)
 	}
 }
 
