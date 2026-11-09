@@ -101,6 +101,8 @@ func Open(dir, repo string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("database: %w", err)
 	}
+	// Older versions opened an issue for every finding, notes too; an issue only a note backs is not a problem.
+	_, _ = db.Exec(`DELETE FROM issues WHERE state = 'open' AND NOT EXISTS (SELECT 1 FROM findings f WHERE f.key = issues.key AND f.doubt = '')`)
 	return &Store{db: db}, nil
 }
 
@@ -225,6 +227,9 @@ func (s *Store) ReplaceFindings(sha string, fs []Finding) error {
 			f.Detail, f.Suggestion, f.Snippet, f.Doubt, f.Key); err != nil {
 			return err
 		}
+		if f.Doubt != "" {
+			continue // a note is shown, but it is not an issue
+		}
 		first := sha
 		if f.FirstSHA != "" {
 			first = f.FirstSHA
@@ -259,11 +264,11 @@ func (s *Store) Findings(sha string) []Finding {
 	return out
 }
 
-// Counts is how many findings each reviewed commit has, by severity.
+// Counts is how many findings each reviewed commit has, by severity. Notes are left out: they raise no alarm.
 func (s *Store) Counts() map[string]map[string]int {
 	out := map[string]map[string]int{}
 	rows, err := s.db.Query(`SELECT f.sha, f.severity, COUNT(*) FROM findings f LEFT JOIN issues i ON i.key = f.key
-		WHERE COALESCE(i.state, 'open') != 'ignored' GROUP BY f.sha, f.severity`)
+		WHERE COALESCE(i.state, 'open') != 'ignored' AND f.doubt = '' GROUP BY f.sha, f.severity`)
 	if err != nil {
 		return out
 	}
@@ -476,6 +481,15 @@ func (s *Store) SetIssueState(key, state string) error {
 		fixed = "manual"
 	}
 	res, err := s.db.Exec(`UPDATE issues SET state=?, fixed_sha=? WHERE key=?`, state, fixed, key)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n > 0 {
+		return nil
+	}
+	// A note has no issue until a person acts on it.
+	res, err = s.db.Exec(`INSERT INTO issues (key, path, first_sha, rule, snippet, state, fixed_sha)
+		SELECT key, path, sha, rule, snippet, ?, ? FROM findings WHERE key=? ORDER BY id LIMIT 1`, state, fixed, key)
 	if err != nil {
 		return err
 	}
