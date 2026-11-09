@@ -5,6 +5,11 @@ How [Codist](https://github.com/AbiXnash/codist) reviews a commit, and where it 
 - **Review** runs the exact code checks on every changed line, then asks the local model about the changed files.
   Each model claim must quote the code it means; a quote that is not there is dropped, and a claim the code does not
   back (a null warning with nothing that makes the value null, say) is shown as a note rather than stated as fact.
+- **Exact facts before a second opinion:** a model claim the code contradicts becomes a note with the reason, before
+  any second look: "strings compared with ==" on a line where Codist's type-aware check finds no string comparison,
+  or "not implemented" when another file of the same commit does it. The model also sees the commit's other changes,
+  so it stops calling things missing that the commit adds elsewhere. A serious claim that survives is checked once
+  more by a second look, and stays an alarm only when the model quotes code that proves it.
 - **Issues** are followed across commits by a key made of the rule or title, the file and the flagged line, so an
   issue is reported once and closed by the commit that fixes it.
 - **Baseline** checks the whole code the first time Codist runs on a repository, crediting each issue to the commit
@@ -14,6 +19,8 @@ How [Codist](https://github.com/AbiXnash/codist) reviews a commit, and where it 
 - **risk** learns from the repository's own history which commits tend to bring bugs (logistic regression, labels
   from fix commits traced back with git blame), tests itself on the newest commits, and is used only when it ranks
   clearly better than chance.
+- **activity** shows what Codist is doing: each work lane's queue (running, waiting, finished), every model call with
+  its prompt and reply, and the log as a live stream, for the interface's Activity page.
 - **store** keeps reviews, findings, issues and incidents in one SQLite file, through a pure-Go driver.
 
 ```go

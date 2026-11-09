@@ -6,10 +6,12 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"path"
 	"sort"
 	"strings"
 
 	"github.com/AbiXnash/codist-git"
+	"github.com/AbiXnash/codist-model"
 	"github.com/AbiXnash/codist-review/store"
 )
 
@@ -71,7 +73,7 @@ func (r *Reviewer) modelReview(ctx context.Context, c git.Commit, ch git.FileCha
 		st.Cached++
 		logger().Debug("model reply from cache", "sha", c.Short, "path", ch.Path)
 	} else {
-		u, err := r.Model.ChatJSON(ctx, system, prompt, schema, &out)
+		u, err := r.Model.ChatJSON(model.WithLabel(ctx, model.Label{Kind: "review", Title: "Review " + path.Base(ch.Path), SHA: c.Short, Path: ch.Path}), system, prompt, schema, &out)
 		if err != nil {
 			return nil, 0, err
 		}

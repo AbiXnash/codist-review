@@ -154,7 +154,8 @@ func (r *Reviewer) Review(ctx context.Context, sha string, opt Options) error {
 			}
 			reviewed++
 			fileStart := time.Now()
-			got, dropped, err := r.modelReview(ctx, commit, t.change, t.file, findings, system, related[t.change.Path], &stats)
+			others := otherChanges(changes, t.change.Path)
+			got, dropped, err := r.modelReview(ctx, commit, t.change, t.file, findings, system, related[t.change.Path]+othersSection(others), &stats)
 			if err != nil {
 				logger().Warn("model could not review file", "sha", c.Short, "path", t.change.Path, "err", err)
 				notes = append(notes, "The model could not review "+t.change.Path+": "+err.Error())
@@ -165,6 +166,7 @@ func (r *Reviewer) Review(ctx context.Context, sha string, opt Options) error {
 			if dropped > 0 {
 				logger().Info("dropped model findings", "sha", c.Short, "path", t.change.Path, "count", dropped)
 			}
+			got = r.contradict(sha, t.change, t.file, others, got) // exact facts first; a contradicted claim skips the second look
 			if !r.NoSecondLook {
 				got = r.secondLook(ctx, commit, t.change, t.file.Lines(), got, &stats)
 			}

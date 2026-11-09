@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/AbiXnash/codist-git"
+	"github.com/AbiXnash/codist-model"
 	"github.com/AbiXnash/codist-review/store"
 )
 
@@ -97,7 +98,7 @@ func (r *Reviewer) secondLook(ctx context.Context, c git.Commit, ch git.FileChan
 		if raw, ok := r.Store.CachedReply(key); ok && json.Unmarshal(raw, &out) == nil {
 			st.Cached++
 		} else {
-			u, err := r.Model.ChatJSON(ctx, judgeSystem, prompt, judgeSchema, &out)
+			u, err := r.Model.ChatJSON(model.WithLabel(ctx, model.Label{Kind: "second look", Title: f.Title, SHA: c.Short, Path: ch.Path}), judgeSystem, prompt, judgeSchema, &out)
 			if err != nil {
 				logger().Warn("second look failed; finding kept as it was", "sha", c.Short, "path", ch.Path, "line", f.Line, "err", err)
 				continue
