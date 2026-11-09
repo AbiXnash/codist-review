@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/AbiXnash/codist-review/store"
+	"github.com/abxengg/codist-review/store"
 )
 
 func TestJavadoc(t *testing.T) {

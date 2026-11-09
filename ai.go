@@ -6,8 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	model "github.com/AbiXnash/codist-model"
-	"github.com/AbiXnash/codist-review/store"
+	model "github.com/abxengg/codist-model"
+	"github.com/abxengg/codist-review/store"
 )
 
 // PromptVersion fingerprints the instructions and the reply format the model gets, so each result can be traced

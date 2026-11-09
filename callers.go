@@ -5,8 +5,8 @@ import (
 	"sort"
 	"strings"
 
-	git "github.com/AbiXnash/codist-git"
-	java "github.com/AbiXnash/codist-java"
+	git "github.com/abxengg/codist-git"
+	java "github.com/abxengg/codist-java"
 )
 
 // A change can break code in a file it never touches: a method that now returns null, throws, or means something

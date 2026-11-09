@@ -5,8 +5,8 @@ import (
 	"regexp"
 	"strings"
 
-	git "github.com/AbiXnash/codist-git"
-	"github.com/AbiXnash/codist-review/store"
+	git "github.com/abxengg/codist-git"
+	"github.com/abxengg/codist-review/store"
 )
 
 // Some model claims can be settled exactly, without asking the model again: what a line compares, or whether the

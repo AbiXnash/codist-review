@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	model "github.com/AbiXnash/codist-model"
+	model "github.com/abxengg/codist-model"
 )
 
 // ---------------------------------------------------------------- lanes

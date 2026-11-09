@@ -17,7 +17,7 @@ import (
 	"strconv"
 	"strings"
 
-	git "github.com/AbiXnash/codist-git"
+	git "github.com/abxengg/codist-git"
 )
 
 // Names are the features, in order. Counts are taken as log(1+n).

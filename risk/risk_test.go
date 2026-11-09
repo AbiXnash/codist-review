@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	git "github.com/AbiXnash/codist-git"
+	git "github.com/abxengg/codist-git"
 )
 
 type repo struct {

@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	git "github.com/AbiXnash/codist-git"
-	"github.com/AbiXnash/codist-review/store"
+	git "github.com/abxengg/codist-git"
+	"github.com/abxengg/codist-review/store"
 )
 
 const inputJava = `package dev.glowmaze;

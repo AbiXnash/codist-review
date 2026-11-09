@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	git "github.com/AbiXnash/codist-git"
-	"github.com/AbiXnash/codist-review/store"
+	git "github.com/abxengg/codist-git"
+	"github.com/abxengg/codist-review/store"
 )
 
 // todoLang is a made-up second language, to show one plugs in with no change to the review: .todo files, where a

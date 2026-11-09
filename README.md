@@ -1,6 +1,6 @@
 # codist-review
 
-How [Codist](https://github.com/AbiXnash/codist) reviews a commit, and where it keeps the results.
+How [Codist](https://github.com/abxengg/codist) reviews a commit, and where it keeps the results.
 
 - **Review** runs the exact code checks on every changed line, then asks the local model about the changed files.
   Each model claim must quote the code it means; a quote that is not there is dropped, and a claim the code does not
@@ -25,8 +25,8 @@ How [Codist](https://github.com/AbiXnash/codist) reviews a commit, and where it 
 
 ```go
 import (
-    review "github.com/AbiXnash/codist-review"
-    "github.com/AbiXnash/codist-review/store"
+    review "github.com/abxengg/codist-review"
+    "github.com/abxengg/codist-review/store"
 )
 
 st, _ := store.Open(dataDir, "my-repo")
@@ -62,7 +62,7 @@ of those needs its own part of the language later.
 Source available under the [PolyForm Noncommercial License 1.0.0](LICENSE): free for any noncommercial purpose, such
 as personal study, research, hobby projects and testing, and for use by charities, schools, public research and
 public health bodies and government institutions. **Using it for a business, or in anything sold, needs a commercial
-licence** from the author: open an issue at [github.com/AbiXnash/codist](https://github.com/AbiXnash/codist/issues)
+licence** from the author: open an issue at [github.com/abxengg/codist](https://github.com/abxengg/codist/issues)
 to ask. Third-party code included in Codist keeps its own licence.
 
 Required Notice: Copyright 2026 Abinash (https://github.com/AbiXnash)

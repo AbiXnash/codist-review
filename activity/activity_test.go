@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	model "github.com/AbiXnash/codist-model"
+	model "github.com/abxengg/codist-model"
 )
 
 type job struct{ sha string }

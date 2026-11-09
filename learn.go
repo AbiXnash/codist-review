@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/AbiXnash/codist-review/store"
+	"github.com/abxengg/codist-review/store"
 )
 
 // Learning from feedback: the model sees a few of the findings this team marked wrong or useful, as examples of

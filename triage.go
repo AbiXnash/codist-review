@@ -7,7 +7,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/AbiXnash/codist-review/store"
+	"github.com/abxengg/codist-review/store"
 )
 
 // Triage learns, from the findings this team marked useful or wrong, which new model findings look like the wrong

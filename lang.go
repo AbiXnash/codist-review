@@ -3,7 +3,7 @@ package review
 import (
 	"strings"
 
-	java "github.com/AbiXnash/codist-java"
+	java "github.com/abxengg/codist-java"
 )
 
 // Language is everything a review needs from one programming language. Java comes from codist-java. Another language,

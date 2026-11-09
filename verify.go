@@ -9,9 +9,9 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/AbiXnash/codist-git"
-	"github.com/AbiXnash/codist-model"
-	"github.com/AbiXnash/codist-review/store"
+	"github.com/abxengg/codist-git"
+	"github.com/abxengg/codist-model"
+	"github.com/abxengg/codist-review/store"
 )
 
 // JudgeVersion names the second look's instructions, so cached verdicts from older wording are not reused.

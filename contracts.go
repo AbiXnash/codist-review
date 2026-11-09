@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	git "github.com/AbiXnash/codist-git"
+	git "github.com/abxengg/codist-git"
 )
 
 // A change is often wrong only against what the code around it promises: a method whose javadoc says the total
