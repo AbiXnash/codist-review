@@ -56,6 +56,8 @@ func TestSecondLanguage(t *testing.T) {
 	sha := head(t, dir)
 
 	repo, _ := git.Open(dir)
+
+	t.Cleanup(repo.Close) // stop its git process before the folder is removed
 	st, err := store.Open(t.TempDir(), "r")
 	if err != nil {
 		t.Fatal(err)

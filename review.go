@@ -36,6 +36,7 @@ type Reviewer struct {
 	Ignored func(path string) bool
 	// Languages are the languages reviewed; empty means Java only. See Language.
 	Languages []Language
+	head      string // HEAD while one review runs, so it is asked of git once and not for every file
 	// NoSecondLook turns off the model's second look at each serious finding it made (see secondLook). It is on
 	// unless turned off: on the planted-bug test it turned false alarms on clean commits into notes.
 	NoSecondLook bool
@@ -60,6 +61,8 @@ func (r *Reviewer) Review(ctx context.Context, sha string, opt Options) error {
 		return err
 	}
 	sha = c.SHA
+	r.head = r.Repo.Head()
+	defer func() { r.head = "" }()
 	started := time.Now()
 	modelName := ""
 	if r.Model != nil && !opt.RulesOnly {
@@ -351,10 +354,15 @@ func (r *Reviewer) Baseline(files map[string][]byte) (int, error) {
 	}
 	for _, x := range all {
 		path, f := x.path, x.parsed
+		var blame []string // the commit that last changed each line, read once for a file that has findings
 		for _, is := range x.lang.Check(f, nil, facts[x.lang]) {
 			fd := finding(BaselineSHA, path, f, is.Line, is.End, is.Severity, "rule", is.Rule, is.Title, is.Detail, is.Suggestion, "")
-			if c, ok := r.Repo.LastChange(path, is.Line); ok {
-				fd.FirstSHA = c.SHA
+			if blame == nil {
+				blame = append([]string{}, r.Repo.BlameAt("HEAD", path, 1, max(1, len(f.Lines())))...)
+			}
+			// A line not committed yet is blamed on a commit of all zeros: it has no first commit.
+			if is.Line >= 1 && is.Line <= len(blame) && strings.Trim(blame[is.Line-1], "0") != "" {
+				fd.FirstSHA = blame[is.Line-1]
 			}
 			findings = append(findings, fd)
 		}
@@ -428,7 +436,10 @@ type cachedFacts struct {
 // facts is what a language's checks know about the whole project, such as which methods return an Optional. It is
 // read from HEAD once per HEAD: the newest code is the best guess at the project's methods for any commit.
 func (r *Reviewer) facts(lang Language) any {
-	head := r.Repo.Head()
+	head := r.head
+	if head == "" {
+		head = r.Repo.Head()
+	}
 	key := r.Repo.Root + "\x00" + lang.Name()
 	if c, ok := factsCache.Load(key); ok && c.(cachedFacts).head == head {
 		return c.(cachedFacts).facts

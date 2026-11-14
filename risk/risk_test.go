@@ -48,6 +48,7 @@ func (r *repo) open() *git.Repo {
 	if err != nil {
 		r.t.Fatal(err)
 	}
+	r.t.Cleanup(g.Close) // stop its git process before the folder is removed
 	return g
 }
 

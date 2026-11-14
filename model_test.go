@@ -57,6 +57,7 @@ func setup(t *testing.T) (*testrepo.Repo, *Reviewer, *store.Store) {
 	t.Helper()
 	tr := testrepo.New(t)
 	repo, err := git.Open(tr.Dir)
+	t.Cleanup(repo.Close) // stop its git process before the folder is removed
 	if err != nil {
 		t.Fatal(err)
 	}
