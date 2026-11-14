@@ -3,6 +3,7 @@ package review
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -115,11 +116,16 @@ func TestModelReviewLimitsAndFailures(t *testing.T) {
 	}
 
 	fm.status = 500
-	if err := r.Review(context.Background(), tr.Bug, Options{}); err != nil {
-		t.Fatal(err)
+	// Every call failed, so the model read nothing: the checks are stored, the review names no model, and the
+	// caller is told, so it can try again when the server is back.
+	if err := r.Review(context.Background(), tr.Bug, Options{}); !errors.Is(err, ErrModelFailed) {
+		t.Fatalf("a model that fails every call: %v", err)
 	}
-	if rv, _ := st.GetReview(tr.Bug); rv.Status != "done" || !strings.Contains(rv.Note, "could not review "+testrepo.ServicePath) {
-		t.Errorf("a model failure is a note, not a failed review: %+v", rv)
+	if rv, _ := st.GetReview(tr.Bug); rv.Status != "done" || rv.Model != "" || !strings.Contains(rv.Note, "could not review "+testrepo.ServicePath) {
+		t.Errorf("a model failure leaves a checks-only review: %+v", rv)
+	}
+	if n := st.CountsOf(tr.Bug); len(st.Findings(tr.Bug)) == 0 || n["medium"]+n["high"]+n["low"]+n["critical"] == 0 || len(st.CountsOf("none")) != 0 {
+		t.Errorf("the code checks are kept: %v", n)
 	}
 
 	// Rules only, with a reason: the model is not asked.

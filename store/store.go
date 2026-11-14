@@ -286,6 +286,25 @@ func (s *Store) Counts() map[string]map[string]int {
 	return out
 }
 
+// CountsOf is Counts for one commit, without reading every other commit's findings.
+func (s *Store) CountsOf(sha string) map[string]int {
+	out := map[string]int{}
+	rows, err := s.db.Query(`SELECT f.severity, COUNT(*) FROM findings f LEFT JOIN issues i ON i.key = f.key
+		WHERE f.sha = ? AND COALESCE(i.state, 'open') != 'ignored' AND f.doubt = '' GROUP BY f.severity`, sha)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var sev string
+		var n int
+		if rows.Scan(&sev, &n) == nil {
+			out[sev] = n
+		}
+	}
+	return out
+}
+
 // OpenIssue is an issue that is still open.
 type OpenIssue struct {
 	Key, Rule, Snippet string

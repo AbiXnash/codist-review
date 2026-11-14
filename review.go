@@ -7,6 +7,7 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"slices"
@@ -45,6 +46,11 @@ type Options struct {
 	RulesOnly bool   // skip the model, for catching up on older commits
 	Why       string // why the model was skipped, shown with the review
 }
+
+// ErrModelFailed is returned by Review when the model was asked about a commit's files and every call failed, as
+// when its server stops. The code checks are stored and the review is saved without a model, so the caller can
+// wait for the server and review the commit again.
+var ErrModelFailed = errors.New("the model could not read this commit")
 
 // Review reviews one commit and stores the result. Code check findings are saved first, so they
 // show while the model is still working.
@@ -140,7 +146,7 @@ func (r *Reviewer) Review(ctx context.Context, sha string, opt Options) error {
 		if r.Learn {
 			triage = r.triageFromFeedback()
 		}
-		reviewed := 0
+		reviewed, failures := 0, 0
 		for _, t := range targets {
 			if ctx.Err() != nil {
 				return fail(ctx.Err())
@@ -159,6 +165,7 @@ func (r *Reviewer) Review(ctx context.Context, sha string, opt Options) error {
 			if err != nil {
 				logger().Warn("model could not review file", "sha", c.Short, "path", t.change.Path, "err", err)
 				notes = append(notes, "The model could not review "+t.change.Path+": "+err.Error())
+				failures++
 				continue
 			}
 			logger().Debug("model reviewed file", "sha", c.Short, "path", t.change.Path, "kept", len(got), "dropped", dropped,
@@ -175,6 +182,13 @@ func (r *Reviewer) Review(ctx context.Context, sha string, opt Options) error {
 			}
 			findings = append(findings, r.hideWrong(got, &stats)...)
 			warnIf(r.Store.ReplaceFindings(sha, findings), "progress not saved", "sha", c.Short) // show progress file by file
+		}
+		if reviewed > 0 && failures == reviewed { // the model read nothing: this is not a model review
+			r.resolve(sha, changes)
+			r.settle(sha, findings)
+			warnIf(r.Store.SetReview(store.Review{SHA: sha, Status: "done", Started: started, Finished: time.Now(),
+				Note: "The model could not read this commit (" + notes[len(notes)-1] + "); the code checks are done."}), "review status not saved", "sha", c.Short)
+			return ErrModelFailed
 		}
 	}
 	r.resolve(sha, changes)
